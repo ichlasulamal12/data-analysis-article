@@ -1,0 +1,312 @@
+---
+title: "Data Visualisasi World University 2020"
+author: "Ichlasul Amal"
+date: "7 April 2021"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: false
+    gallery: false
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+# Intro dan Objektif
+
+Artikel ini akan membahas mengenai universitas-universitas di seluruh dunia. Dataset yang digunakan adalah data pemeringkatan Universitas di seluruh dunia yang diambil dari [kaggle](https://www.kaggle.com/joeshamen/world-university-rankings-2020) dan berdasarkan hasil pemeringkatan The Times Higher Education 2020.
+
+Tujuan pembuatan artikel ini antara lain:
+
+- mengetahui universitas-universitas terbaik di dunia dilihat dari nilai akhir dan nilai dari semua kategori
+- mengetahui negara apa saja dan berapa jumlah masing-masing negara yang masuk dalam universitas terbaik dunia
+- mengetahui berapa jumlah mahasiswa dari universitas terbaik dunia
+- mengetahui berapa proporsi antara mahasiswa male dan female, juga mahasiswa dan staf pada universitas di dunia berdasarkan kategori rankingnya
+- mengetahui hubungan antara nilai akhir dengan nilai dari semua kategori
+
+Digunakan teknik visualisasi data untuk mencapai tujuan tersebut.
+
+# Read data dan preprocessing
+
+Melakukan pembacaan pada dataset yang akan digunakan dalam artikel.
+
+```{r}
+library(readxl)
+
+univ <- read_excel("Addresses_Geocoded 2.xlsx")
+```
+
+Fungsi `glimpse()` dapat digunakan untuk melihat struktur pada dataset.
+
+```{r}
+library(tidyverse)
+
+glimpse(univ)
+```
+Variabel-variabel yang digunakan antara lain:
+
+- Rank Char: peringkat universitas menurut The Times Higher Education
+- Score Rank: peringkat berdasarkan kolom Score Result
+- University: nama universitas atau perguruan tinggi
+- Country: negara asal perguruan tinggi 
+- Number Students: jumlah mahasiswa
+- Numb Students per Staff: rasio mahasiswa per staf
+- International Students: jumlah mahasiswa internasional 
+- Percentage Female: persentase mahasiswa perempuan
+- Percentage Male: persentase mahasiswa laki-laki
+- Teaching: nilai dalam kategori mengajar
+- Research: nilai dalam kategori riset/penelitian
+- Citations: nilai dalam kategori sitasi
+- Industry Income: nilai dalam kategori pendapatan industri
+- International Outlook: nilai dalam pandangan internasional
+- Score Result: nilai yang dihasilkan (Teaching 30%, Research 30%, Citations 30%, International Outlook 7,5%, Industry Income 2,5%)
+
+Berikut ditampilkan isi dari dataset.
+
+```{r}
+univ
+```
+
+Selanjutnya memilih variabel yang akan diutuhkan dalam visualisasi data, lalu mengubah jenis variabel yang belum sesuai. Variabel `Country` dan `Categoric` dibuat menjadi variabel faktor/kategorik.
+
+```{r}
+univ_clean <- univ %>% 
+  select(-c(Number, Rank_Char, Overall_Ranking, latitude, longitude)) %>% 
+  mutate(Country = as.factor(Country),
+         Categoric = factor(Categoric, levels = c("1-10", "11-100", "101-200", "201-250", 
+                                                  "251-300", "301-350", "351-400", "401-500", 
+                                                  "501-600", "601-800", "801-1000", "1001+")))
+```
+
+Mengecek apakah terdapat data yang missing atau tidak.
+
+```{r}
+anyNA(univ_clean)
+```
+Output tersebut menunjukkan bahwa tidak terdapat data yang missing dalam dataset. Data yang telah dilakukan proses cleaning ini dapat digunakan untuk visualisasi data.
+
+```{r}
+theme_DV <- theme(legend.key = element_rect(fill="black"),
+           legend.background = element_rect(color="white", fill="#270d40"),
+           plot.subtitle = element_text(size=6, color="#f0b222"),
+           panel.background = element_rect(fill="#ead3f5"),
+           panel.border = element_rect(fill=NA),
+           panel.grid.minor.x = element_blank(),
+           panel.grid.major.x = element_blank(),
+           panel.grid.major.y = element_line(color="#e3c7f0", linetype=2),
+           panel.grid.minor.y = element_blank(),
+           plot.background = element_rect(fill="#270d40"),
+           text = element_text(color="white"),
+           axis.text = element_text(color="white")
+           )
+```
+
+# Visualisasi
+
+Bagian ini berisi semua visualisasi data yang diperlukan. Dibuat enam bagian dari visualisasi data pada dataset World University. 
+
+## Peringkat universitas
+
+Sub bagian ini akan menjawab mengenai universitas-universitas yang terbaik di seluruh dunia berdasarkan nilai akhir. Ditampilkan sepuluh universitas terbaik di dunia.
+
+```{r fig.height=5, fig.width=8}
+univ_clean %>%
+  select(University, Teaching, Research, Citations,
+         Industry_Income, International_Outlook, Score_Result) %>% 
+  arrange(desc(Score_Result)) %>% 
+  slice(1:10) %>% 
+  ggplot(aes(x = Score_Result,
+             y = reorder(University, Score_Result))) +
+  geom_col(aes(fill = Score_Result)) +
+  geom_text(aes(label = Score_Result),
+            color = "white", size = 2.6, nudge_x = -6) +
+  labs(x = NULL,
+       y = NULL,
+       title = "Peringkat Universitas Terbaik Dunia 2020") +
+  theme_DV
+```
+
+Peringkat pertama diduduki oleh University of Oxford dengan nilai mencapai 95,4, diikuti California Institute of Technology pada peringkat 2, dan University of Cambridge pada peringkat 3. Hampir semua sepuluh universitas terbaik dunia memiliki nilai di atas 90.
+
+
+## Peringkat negara
+
+Visualisasi selanjutnya akan membahas negara dan berapa jumlah masing-masing negara yang masuk dalam universitas terbaik dunia.
+
+```{r}
+univ_clean %>% 
+  slice(1:100) %>% 
+  group_by(Country) %>% 
+  summarise(value = n()) %>% 
+  arrange(desc(value)) %>% 
+  ggplot(aes(x = value,
+             y = reorder(Country, value))) + 
+  geom_col(aes(fill = value)) +
+  scale_fill_gradient(name = "Value", low = "blue", high = "red") +
+  labs(x = NULL,
+       y = NULL,
+       title = "Negara berdasarkan Jumlah Universitas Terbaik Dunia") +
+  theme_DV
+```
+
+Negara peringkat pertama adalah Amerika Serikat, dengan jumlah universitas yang masuk dalam seratus universitas terbaik 40, diikuti Inggris sebanyak 11, dan Jerman sebanyak 8 universitas.
+
+## Jumlah mahasiswa
+
+Visualisasi sub bagian ini bertujuan untuk mengetahui berapa jumlah mahasiswa dari universitas-universitas terbaik di dunia.
+
+```{r fig.height=9, fig.width=10}
+univ_clean %>% 
+  slice(1:25) %>% 
+  select(Score_Rank, University, Number_students, Categoric) %>% 
+  ggplot(aes(x = Number_students,
+             y = reorder(University, Number_students))) +
+  geom_col(aes(fill = Categoric)) +
+  facet_grid(Categoric ~ ., scales = "free") +
+  labs(x = NULL,
+       y = NULL,
+       title = "Jumlah Mahasiswa Universitas Terbaik Dunia") +
+  theme_DV
+```
+
+Gambar tersebut menampilkan 25 universitas terbaik di dunia. Secara umum, 10 universitas terbaik dunia memiliki jumlah mahasiswa yang cenderung lebih sedikit dibandingkan universitas yang berada dalam peeringkat 11 hingga 25.
+
+## Perbandingan gender
+
+Visualisasi berikutnya akan membahas mengenai proporsi antara mahasiswa laki-laki dan perempuan.
+
+```{r fig.height=5, fig.width=8}
+univ_clean %>% 
+  select(Categoric, Percentage_Female, Percentage_Male) %>% 
+  pivot_longer(cols = c(Percentage_Female, Percentage_Male), 
+               names_to = "var", 
+               values_to = "value") %>% 
+  group_by(Categoric, var) %>% 
+  summarise(rerata_student = mean(value)) %>% 
+  mutate(gender = ifelse(var == "Percentage_Female", "Female", "Male")) %>%
+  group_by(Categoric) %>% 
+  mutate(proportion = round(rerata_student/sum(rerata_student),2)*100) %>% 
+  ggplot(aes(x = rerata_student, 
+             y = reorder(Categoric, desc(Categoric)))) +
+  geom_col(aes(fill = var), position = "fill") +
+  geom_vline(xintercept = 0.5, col = "white", lty = 2, lwd = 1.3) + 
+  labs(x = NULL,
+       y = NULL,
+       title = "Perbandingan Gender Mahasiswa Berdasarkan Peringkat Universitas") +
+  scale_fill_manual(name = NULL, labels = c("Percentage Female", "Percentage Male"), 
+                    values = c("#9e065f", "#45069e")) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_DV
+```
+
+Pada universitas berperingkat 11 hingga 1001+, perbandingan antara mahasiswa laki-laki dan perempuan seimbang. Namun berbeda halnya dengan universitas berperingkat 1 hingga 10, yang memiliki persentase mahasiswa laki-laki lebih banyak daripada mahasiswa perempuan dengan rasio 56:44.
+
+## Rasio mahasiswa per staf
+
+Visualisasi ini, seperti sub bagian sebelumnya, juga akan membahas mengenai perbandingan. Visualisasi ini bertujuan mengetahui bagaimana rasio antara mahasiswa dan staf pada universitas di dunia berdasarkan kategori rankingnya.
+
+```{r fig.height=5, fig.width=8}
+univ_clean %>% 
+  group_by(Categoric) %>% 
+  summarise(rerata_students_per_Staff = median(Numb_students_per_Staff)) %>%
+  ggplot(aes(x = Categoric,
+             y = rerata_students_per_Staff)) +
+  geom_col(fill = "#12a148") +
+  scale_y_continuous(limits = c(0, 18),
+                     breaks = seq(0, 18, 3)) +
+  geom_hline(yintercept = median(univ_clean$Numb_students_per_Staff), 
+             linetype = 2, size = 1, col = "white") +
+  geom_text(aes(1.3, median(univ_clean$Numb_students_per_Staff), 
+                label = "Nilai Median",
+                vjust = -0.5),
+            color = "white",
+            size = 4) +
+  labs(x = NULL,
+       y = NULL,
+       title = "Rasio Mahasiswa per Staf Berdasarkan Peringkat Universitas") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+  theme_DV
+```
+
+Sumbu X pada gambar tersebut adalah kategori peringkat universitas, sumbu Y adalah jumlah mahasiswa per staff. Garis putih putus-putus horizontal adalah adalah jumlah mahasiswa per staff semua universitas pada dataset tanpa mempertimbangkan pembagian kategori peringkat. Pada universitas peringkat 1 hingga 10, memiliki jumlah mahasiswa per staff yang lebih sedikit jika dibandingkan dengan kategori peringkat lain, yaitu sebesar 8,35. Nilai ini berbeda cukup besar dengan kategori peringkat yang lain, yang kebanyakan berada pada nilai lebih dari 15. Kategori peringkat yang memiliki nilai tertinggi adalah 501-600 dengan nilai sebesar 17,6. Ini artinya pada universitas dengan kategori peringkat 501 hingga 600, terdapat satu staff untuk setiap 17,6 ~ 18 mahasiswa.
+
+## Kategori penilaian {.tabset}
+
+Sub bagian terakhir, membahas mengenai bagaimana hubungan antara nilai akhir dengan nilai dari semua kategori. Terdapat lima kategori penilaian, yaitu Teaching, Research, Citations, Industry Income, dan International Outlook.
+
+```{r fig.height=10, fig.width=12}
+library(RColorBrewer)
+nb.cols <- 12
+mycolors <- colorRampPalette(brewer.pal(8, "Reds"))(nb.cols)
+
+cat_names <- as_labeller(c("Citations" = "Citations",
+                           "Industry_Income" = "Industry Income",
+                           "International_Outlook" = "International Outlook",
+                           "Research" = "Research", 
+                           "Teaching" = "Teaching"))
+
+univ_clean %>% 
+  select(Categoric, Teaching, Research, Citations, 
+         Industry_Income, International_Outlook, Score_Result) %>% 
+  pivot_longer(cols = c(Teaching, Research, Citations, 
+                        Industry_Income, International_Outlook), 
+               names_to = "var", 
+               values_to = "value") %>% 
+  ggplot(aes(x = value, y = Score_Result)) +
+  geom_point(aes(color = Categoric)) +
+  facet_wrap(~ var, scales = "free", labeller = cat_names) +
+  scale_y_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 25)) +
+  scale_x_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 25)) +
+  scale_colour_manual(name = "Peringkat", values = mycolors) +
+  labs(title = "Hubungan Kategori Penilaian terhadap Nilai Akhir",
+             y = "Score Result",
+             x = "") +
+  theme(plot.title = element_text(face = "bold", size = 14, hjust = 0),
+        panel.background = element_rect(fill = "#ffffff"), 
+        panel.grid.major.x = element_line(colour = "grey"),
+        panel.grid.major.y = element_line(colour = "grey"),
+        axis.line.x = element_line(color = "grey"),
+        axis.line.y = element_line(color = "grey"),
+        axis.text = element_text(size = 10, colour = "black"))
+```
+
+### Citations
+
+Kategori penilaian pertama adalah Citations. Secara visual, tidak begitu terlihat, bahwa jika semakin tinggi nilai Citations, maka akan menghasilkan semakin tinggi nilai akhir. Hal ini karena, pada beberapa universitas, meskipun memiliki nilai Citations yang tinggi, tidak menjamin memiliki peringkat universitas yang bagus. Agar dapat mengetahui insight yang lebih tepat, dapat dilakukan analisis statistika, misal analisis regresi.
+
+### Industry Income
+
+Kategori penilaian kedua adalah Industry Income. Secara visual terlihat pada setiap kategori peringkat, nilai Industry Income menyebar. Nilai Industry Income secara visual tidak begitu berpengaruh terhadap nilai akhir yang didapatkan. Sebagian besar, nilai Industry Income berada pada nilai yang kurang dari 50.
+
+### International Outlook
+
+Kategori penilaian International Outlook agak mirip dengan Citations. Secara visual, tidak begitu terlihat, bahwa jika semakin tinggi nilai International Outlook, maka akan menghasilkan semakin tinggi nilai akhir. Hal ini karena, pada beberapa universitas, meskipun memiliki nilai International Outlook yang tinggi, tidak menjamin memiliki peringkat universitas yang bagus. Agar dapat mengetahui insight yang lebih tepat, dapat dilakukan analisis statistika, misal analisis regresi.
+
+### Research
+
+Kategori penilaian selanjutnya adalah Research. Secara visual, terlihat bahwa semakin tinggi nilai Research, maka semakin tinggi juga nilai akhir. Bisa terlihat juga bahwa semakin tinggi nilai Research, maka semakin bagus juga peringkat universitas.
+
+### Teaching
+
+Sebagaimana Research, kategori penilaian Teaching secara visual terlihat bahwa semakin tinggi nilai Teaching, maka semakin tinggi juga nilai akhir. Bisa terlihat juga bahwa semakin tinggi nilai Teaching, maka semakin bagus juga peringkat universitas.
+
+## {-}
+
+# Penutup
+
+Dari berbagai visualisasi yang telah dibuat, dapat dibuat ringkasan sebagai berikut:
+
+- Pada pembahasan peringkat universitas, pada 10 universitas terbaik, hampir seluruhnya memiliki nilai akhir di atas 90.
+- Pada pembahasan peringkat negara, hampir 60% pada 100 universitas terbaik dunia, berasal dari tiga negara, yaitu Amerika Serikat, Inggris, dan Jerman.
+- Pada pembahasan jumlah mahasiswa, secara umum, 10 universitas terbaik dunia memiliki jumlah mahasiswa yang cenderung lebih sedikit dibandingkan kategori peringkat universitas yang lain.
+- Pada pembahasan perbandingan gender, 10 universitas terbaik dunia memiliki persentase mahasiswa laki-laki lebih banyak daripada mahasiswa perempuan dengan rasio 56:44, berbeda dengan kategori peringkat universitas lain yang rasionya cenderung seimbang.
+- Pada pembahasan rasio mahasiswa per staff, 10 universitas terbaik dunia memiliki rasio yang jauh lebih sedikit yaitu sebesar 8,35, dibandingkan kategori peringkat universitas yang lain, yang kebanyakan berada pada nilai lebih dari 15.
+- Pada kategori penilaian, terdapat lima kategori, yaitu Teaching, Research, Citations, Industry Income, dan International Outlook. Secara visual, sebagian kategori berhubungan linear dengan nilai akhir dan sebagian kategori yang lain tidak berhubungan linear dengan nilai akhir.
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
