@@ -1,0 +1,665 @@
+---
+title: "Klasifikasi Menggunakan Naive Bayes, Decision Tree, dan Random Forest"
+author: "Ichlasul Amal"
+date: "January 23, 2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+        collapsed: true
+    number_sections: true
+    theme: cosmo
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 9999)
+```
+
+# Objektif
+
+Artikel ini akan membahas mengenai penerapan klasifikasi menggunakan Naive Bayes, Decision Tree, dan Random Forest pada industri perbankan. Dataset yang digunakan berasal dari ["Bank Marketing" UCI dataset](https://archive.ics.uci.edu/ml/datasets/bank+marketing). Data tersebut terkait dengan kampanye pemasaran langsung dari lembaga perbankan Portugal. Kampanye pemasaran didasarkan pada panggilan telepon. Data diperkaya dengan penambahan lima fitur yaitu atribut sosial dan ekonomi baru, yang diterbitkan oleh Banco de Portugal dan dapat diakses [disini](https://www.bportugal.pt/estatisticasweb). Tujuan klasifikasi adalah untuk memprediksi apakah klien akan berlangganan (ya/tidak) deposito berjangka (variabel y).
+
+# Read data
+
+```{r}
+bank <- read.csv("bank-additional/bank-additional-full.csv", sep = ";")
+bank
+```
+
+```{r}
+library(tidyverse)
+glimpse(bank)
+```
+
+Deskripsi dari tiap kolom pada dataset sebagai berikut:
+
+Variabel prediktor:
+
+- data klien bank:
+   1. `age` (numeric)
+   2. `job`: jenis pekerjaan (categorical: "admin.","blue-collar","entrepreneur","housemaid","management","retired","self-employed","services","student","technician","unemployed","unknown")
+   3. `marital`: status perkawinan (categorical: "divorced","married","single","unknown"; note: "divorced" means divorced or widowed)
+   4. `education` (categorical: "basic.4y", "basic.6y", "basic.9y", "high.school", "illiterate", "professional.course", "university.degree", "unknown")
+   5. `default`: memiliki kredit dalam default? (categorical: "no","yes","unknown")
+   6. `housing`: memiliki pinjaman perumahan? (categorical: "no","yes","unknown")
+   7. `loan`: memiliki pinjaman pribadi? (categorical: "no","yes","unknown")
+   
+- terkait dengan kontak terakhir kampanye saat ini:
+   8. `contact`: jenis komunikasi kontak (categorical: "cellular","telephone")
+   9. `month`: bulan kontak terakhir dalam setahun (categorical: "jan", "feb", "mar", ..., "nov", "dec")
+  10. `day_of_week`: hari kontak terakhir dalam seminggu (categorical: "mon","tue","wed","thu","fri")
+  11. `duration`: durasi kontak terakhir, dalam detik (numerik)
+
+- atribut lainnya:
+  12. `campaign`: jumlah kontak yang dilakukan selama kampanye ini dan untuk klien ini (numeric, includes last contact)
+  13. `pdays`: jumlah hari yang berlalu setelah klien terakhir dihubungi dari kampanye sebelumnya (numeric; 999 berarti klien sebelumnya tidak dihubungi)
+  14. `previous`: jumlah kontak yang dilakukan sebelum kampanye ini dan untuk klien ini (numeric)
+  15. `poutcome`: hasil dari kampanye pemasaran sebelumnya (categorical: "failure","nonexistent","success")
+
+- Atribut konteks sosial dan ekonomi
+  16. `emp.var.rate`: tingkat variasi pekerjaan - indikator triwulanan (numeric)
+  17. `cons.price.idx`: indeks harga konsumen - indikator bulanan (numeric)
+  18. `cons.conf.idx`: indeks kepercayaan konsumen - indikator bulanan (numeric)
+  19. `euribor3m`: euribor 3 bulan kurs - indikator harian (numeric)
+  20. `nr.employed`: jumlah karyawan - indikator triwulanan (numeric)
+
+Variabel output (target yang diinginkan):
+
+  21. `y`: apakah klien berlangganan deposito berjangka? (binary: "yes","no")
+
+# Data wrangling
+
+Variabel `duration` tidak digunakan dalam melakukan pemodelan klasifikasi, sehingga variabel ini dibuang. Hal ini karena atribut duration sangat mempengaruhi keluaran target (misalnya, jika durasi = 0 maka y = "tidak"). Namun, `duration` tidak diketahui sebelum panggilan dilakukan. Juga, setelah panggilan berakhir, y jelas diketahui. Dengan demikian, input ini hanya boleh dimasukkan untuk tujuan benchmark dan harus dibuang jika tujuannya adalah untuk memiliki model prediksi yang realistis.
+
+```{r}
+bank <- bank %>% 
+  select(-duration)
+```
+
+Dilakukan pengecekan pada variabel yang memiliki variance mendekati nol. Variabel yang variannya mendekati nol akan dihapus.
+
+```{r}
+library(caret)
+
+nearZeroVar(bank)
+```
+
+Variabel 12 yaitu `pdays` memiliki variansi mendekati nol, sehingga akan dihapus.
+
+```{r}
+bank <- bank[,-nearZeroVar(bank)]
+```
+
+Cek keberadaan outlier pada dataset.
+
+```{r}
+library(outliers)
+
+bank %>% 
+  select(is.numeric) %>% 
+  outlier()
+```
+
+Kemudian menghapus semua outlier yang terdapat dalam dataset.
+
+```{r}
+bank <- bank %>% 
+  filter(age != 98.000,
+         campaign != 56.000,
+         previous != 7.000,
+         emp.var.rate != -3.400,
+         cons.price.idx	!= 92.201,
+         cons.conf.idx != -26.900,			
+         euribor3m != 0.634,			
+         nr.employed != 4963.600)
+```
+
+# Analisis data eksplorasi
+
+Cek missing value
+```{r}
+colSums(is.na(bank))
+```
+
+Hasil di atas menunjukkan bahwa tidak terdapat missing value pada dataset yang akan digunakan dalam klasifikasi.
+
+```{r}
+library(GGally)
+ggcorr(bank, hjust = 1, layout.exp = 2, label = T, label_size = 2.9)
+```
+
+Hasil korelasi di atas menunjukkan bahwa terdapat korelasi yang kuat pada beberapa variabel. Variabel-variabel tersebut adalah `emp.var.rate`, `euribor3m`, dan `nr.employed`. Hal ini memberi peringatan dini bahwa variabel tersebut mungkin tidak sesuai untuk beberapa model seperti Naive Bayes.
+
+# Cross validation
+
+Bagian selanjutnya adalah membagi data menjadi data train dan data test. Data train digunakan untuk membangun model, sedangkan data test digunakan untuk menguji model yang sudah dibuat dan mengetahui kinerja model. Perbandingan untuk data train dan data test adalah 80:20.
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+
+index <- sample(nrow(bank), nrow(bank)*0.8)
+data_train <- bank[index, ]
+data_test <- bank[-index, ]
+```
+
+Sebelum masuk ke pemodelan, perlu dicek terlebih dahulu proporsi kategori pada variabel target data train
+
+```{r}
+table(data_train$y)
+```
+
+```{r}
+prop.table(table(data_train$y))
+```
+
+Proporsi pada variabel target di data train 91:9, proporsi ini belum bisa dikatakan seimbang. Sehingga akan dilakukan penyeimbangan pada data. Teknik yang digunakan adalah Synthetic Minority Oversampling Technique (SMOTE). SMOTE bekerja dengan cara down-sample kelas mayoritas dan mensintesis data dari kelas minoritas.
+
+```{r}
+library(DMwR)
+set.seed(100)
+
+data_train <- SMOTE(y ~ ., data  = data_train)
+```
+
+```{r}
+table(data_train$y)
+```
+
+```{r}
+prop.table(table(data_train$y))
+```
+
+Proporsi pada data train telah seimbang, sehingga dapat dilanjutkan untuk pemodelan.
+
+# Pemodelan
+
+## Naive Bayes
+
+Model pertama yang akan digunakan adalah Naive Bayes. Naive Bayes memiliki karakteristik antara lain data prediktor dan target saling dependent, mengasumsikan bahwa semua prediktor data sama pentingnya dan independen. Hal ini memungkinkan Naive Bayes melakukan komputasi yang lebih cepat, selain karena algoritmanya cukup sederhana. Naive bayes rentan terhadap bias karena kelangkaan data (scarcity data). Dalam beberapa kasus, data mungkin memiliki distribusi di mana pengamatan yang langka mengarah pada probabilitas yang mendekati 0 atau 1, yang menyebabkan bias besar di dalam model yang dapat menyebabkan kinerja buruk pada data test (unseen data).
+
+Scarcity data dapat diatasi menggunakan Laplace estimator/smoothing. Ide dari estimator Laplace adalah menambahkan angka yang kecil (biasanya 1) ke setiap hitungan dalam tabel frekuensi. Hal ini dilakukan agar setiap kombinasi fitur-kelas memiliki probabilitas yang bukan nol. Data prediktor pada Naive Bayes lebih sesuai untuk data yang bertipe kategorik. Ini karena Naive Bayes sensitif terhadap scarcity data. Sementara itu variabel kontinu mungkin mengandung sangat langka atau bahkan hanya satu pengamatan untuk nilai tertentu.
+
+### Model fitting
+
+Dilakukan pemodelan menggunakan data train.
+
+```{r}
+library(e1071)
+
+model_naive <- naiveBayes(x = data_train %>% select(-y),
+                          y = data_train$y)
+```
+
+### Prediksi
+
+Cek label untuk peluang yang mendekati 1
+```{r}
+levels(data_train$y)
+```
+
+Kemudian dilakukan prediksi menggunakan data test dari model Naive Bayes yang telah dibangun. Pilihan type `raw` menghasilkan nilai probability kelas target.
+
+```{r}
+naive_prob <- predict(model_naive, data_test, type = "raw")
+```
+
+Membuat dataframe yang memuat variabel target dan hasil prediksi dari model.
+
+```{r}
+naive_table <- tibble(y = data_test$y)
+naive_table$naive_prob_no <- round(naive_prob[,1],4)
+naive_table$naive_prob_yes <- round(naive_prob[,2],4)
+naive_table$naive_class <- factor(ifelse(naive_prob[,2] > 0.5, "yes","no"))
+```
+
+### Evaluasi
+
+Model Naive Bayes akan dilihat bagaimana kinerjanya menggunakan confusion matrix.
+
+```{r}
+cm_naive <- confusionMatrix(naive_table$naive_class, naive_table$y, positive = "yes")
+cm_naive
+```
+
+```{r}
+eval_naive <- tibble(Accuracy = cm_naive$overall[1],
+                     Recall = cm_naive$byClass[1],
+                     Specificity = cm_naive$byClass[2],
+                     Precision = cm_naive$byClass[3])
+eval_naive
+```
+
+Penjelasan metrik di atas sebagai berikut:
+
+- Re-call/Sensitivity = dari semua data aktual yang positif, seberapa mampu proporsi model menebak dengan benar kelas positif.
+- Specificity = dari semua data aktual yang negatif, seberapa mampu proporsi model menebak dengan benar kelas negatif.
+- Accuracy = seberapa mampu model menebak dengan benar variabel target Y.
+- Precision = dari semua hasil prediksi yang positif, seberapa mampu model menebak dengan benar kelas positif.
+
+Dari hasil yang diperoleh, dapat kita ambil informasi bahwa kemampuan model dalam menebak target Y sebesar 73.36%. Sedangkan dari keseluruhan data aktual pada klien yang berlangganan deposito berjangka (kelas `yes`), model mampu menebak dengan benar sebesar 63.23%. Dari keseluruhan data aktual klien yang tidak berlangganan deposito berjangka (kelas `no`), model mampu menebak dengan benar sebesar 74.37%. Dari keseluruhan hasil prediksi yang mampu ditebak oleh model, model hanya mampu menebak dengan benar kelas `yes` sebesar 19.67%.
+
+Ukuran kinerja lain yang bisa digunakan adalah ROC dan AUC. ROC memplot proporsi True Positive Rate (TPR atau Sensitivitas) dengan proporsi False Negative Rate (FNR atau 1-Specificity). ROC adalah kurva probabilitas dan AUC merepresentasikan derajat atau ukuran keterpisahan. ROC memberi tahu seberapa besar model mampu membedakan antar kelas. Semakin dekat kurva mencapai kiri atas plot (True Positive Rate tinggi sedangkan False Negative Rate) maka semakin baik model yang dibangun. Semakin tinggi nilai AUC semakin baik model dalam memisahkan kelas target.
+
+```{r}
+library(ROCR)
+naive_roc <- data.frame(prediction = naive_table$naive_prob_yes,
+                        trueclass = as.numeric(naive_table$y=="yes"))
+
+naive_roc <- prediction(naive_roc$prediction, naive_roc$trueclass) 
+
+# ROC curve
+plot(performance(naive_roc, "tpr", "fpr"),
+     main = "ROC")
+abline(a = 0, b = 1)
+```
+
+```{r}
+auc_ROCR_n <- performance(naive_roc, measure = "auc")
+auc_ROCR_n <- auc_ROCR_n@y.values[[1]]
+auc_ROCR_n
+```
+
+Nilai AUC yang diperoleh sebesar 0.7201481.
+
+#### Tuning cutoff
+```{r}
+library(plotly)
+
+# model tuning - metrics function
+metrics <- function(cutoff, prob, ref, postarget, negtarget) 
+{
+  predict <- factor(ifelse(prob >= cutoff, postarget, negtarget))
+  conf <- caret::confusionMatrix(predict , ref, positive = postarget)
+  acc <- conf$overall[1]
+  rec <- conf$byClass[1]
+  prec <- conf$byClass[3]
+  spec <- conf$byClass[2]
+  mat <- t(as.matrix(c(rec , acc , prec, spec))) 
+  colnames(mat) <- c("recall", "accuracy", "precicion", "specificity")
+  return(mat)
+}
+co <- seq(0.01,0.99,length=100)
+result <- matrix(0,100,4)
+
+# apply function metrics
+for(i in 1:100){
+  result[i,] = metrics(cutoff = co[i], 
+                     prob = naive_table$naive_prob_yes, 
+                     ref = as.factor(ifelse(naive_table$y == "yes", 1, 0)), 
+                     postarget = "1", 
+                     negtarget = "0")
+}
+
+# visualize
+ggplotly(tibble("Recall" = result[,1],
+           "Accuracy" = result[,2],
+           "Precision" = result[,3],
+           "Specificity" = result[,4],
+                   "Cutoff" = co) %>% 
+  gather(key = "Metrics", value = "value", 1:4) %>% 
+  ggplot(aes(x = Cutoff, y = value, col = Metrics)) +
+  geom_line(lwd = 1.5) +
+  scale_color_manual(values = c("darkred","darkgreen","orange", "blue")) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.1)) +
+  labs(title = "Tradeoff Model Perfomance") +
+  theme_light() +
+  theme(legend.position = "top",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank()))
+```
+
+Metrik yang akan digunakan adalah Recall, hal ini memungkinkan dapat sebanyak mungkin mengambil yang kemungkinan masuk kelas positif (kelas `yes`). Pada threshold 0.5, nilai Accuracy, Recall, dan Specificity cukup tinggi, namun nilai Precision rendah, yaitu 19.67%. Untuk meningkatkan nilai Recall, maka threshold harus kurang dari 0.5. Jika menggunakan threshold 0.0198, nilai Recall cukup tinggi yakni sekitar 75%, nilai Accuracy dan Spesificity diangka sekitar 53%, namun nilai Precision turun menjadi sekitar 13%. Seihngga threshold yang akan dipakai dalam penentuan kelas pada Naive Bayes adalah 0.0198.
+
+```{r}
+naive_table$naive_tuning_class <- factor(ifelse(naive_prob[,2] > 0.0198, "yes","no"))
+cm_naive_tuning <- confusionMatrix(naive_table$naive_tuning_class, naive_table$y, positive = "yes")
+eval_naive_tuning <- tibble(Accuracy = cm_naive_tuning$overall[1],
+                     Recall = cm_naive_tuning$byClass[1],
+                     Specificity = cm_naive_tuning$byClass[2],
+                     Precision = cm_naive_tuning$byClass[3],
+                     AUC = auc_ROCR_n)
+eval_naive_tuning
+```
+
+## Decision Tree
+
+Algoritma kedua adalah Decision Tree. Decision Tree adalah salah satu tree-based models yang memiliki manfaat besar karena dapat diinterpretasikan, juga robust dan dapat mengatasi masalah multikolinearitas. Algoritma ini akan membuat sekumpulan aturan yang divisualisasikan dalam diagram yang menyerupai pohon. Decision tree membuat **pohon keputusan** dengan memilih prediktor yang memiliki entropy **rendah** yaitu yang menghasilkan data setelah percabangan yang **homogen**. Selain itu, prediktor yang dipilih adalah yang menghasilkan information gain (penurunan entropy) yang **tinggi**.
+
+Decision tree memiliki kekurangan antara lain cenderung overfit, yakni baik memprediksi di data train namun buruk di data test. Kekurangan tersebut diatasi dengan **pruning** (memangkas pohon), agar decision tree tidak terlalu kompleks. Parameter prunning diantaranya:
+
+- mincriterion: 1-alpha. bila ditinggikan prediktor yang dipakai semakin signifikan.
+- minsplit: jumlah data setelah splitting di internal node (tengah2/akhir)
+- minbucket: jumlah data setelah splitting di terminal node (akhir)
+
+### Model fitting
+
+Dibuat model Decision Tree dengan parameter prunning sebagai berikut:
+
+- P-value dari prediktor agar dapat digunakan untuk splitting setidaknya < 0.01
+- jumlah data setelah splitting: 2000
+- jumlah data setelah splitting di terminal node: 1500
+
+```{r}
+library(partykit)
+
+model_dtree <- ctree(formula = y ~ ., data = data_train,
+                     control = ctree_control(mincriterion=0.99, 
+                                            minsplit=2000,
+                                            minbucket=1500))
+
+plot(model_dtree, type = "simple",
+     gp = gpar(fontsize = 5),
+     inner_panel = node_inner,
+     ip_args = list(abbreviate = FALSE, id = FALSE)
+     )
+```
+
+### Prediksi
+
+Dilakukan prediksi menggunakan data test dari model Decision Tree yang telah dibangun. Pilihan type `prob` menghasilkan nilai probability kelas target.
+
+```{r}
+dtree_prob <- predict(model_dtree, data_test, type = "prob")
+```
+
+Membuat dataframe yang memuat variabel target dan hasil prediksi dari model.
+
+```{r}
+dtree_table <- tibble(y = data_test$y)
+dtree_table$dtree_prob_no <- round(dtree_prob[,1],4)
+dtree_table$dtree_prob_yes <- round(dtree_prob[,2],4)
+dtree_table$dtree_class <- factor(ifelse(dtree_prob[,2] > 0.5, "yes","no"))
+```
+
+### Evaluasi
+
+Model Decision Tree akan dilihat bagaimana kinerjanya menggunakan confusion matrix.
+
+```{r}
+cm_dtree <- confusionMatrix(dtree_table$dtree_class, dtree_table$y, positive = "yes")
+cm_dtree
+```
+
+```{r}
+eval_dtree <- tibble(Accuracy = cm_dtree$overall[1],
+                     Recall = cm_dtree$byClass[1],
+                     Specificity = cm_dtree$byClass[2],
+                     Precision = cm_dtree$byClass[3])
+eval_dtree
+```
+
+Dari hasil yang diperoleh, dapat diambil informasi bahwa kemampuan model dalam menebak target Y sebesar 86.99%. Sedangkan dari keseluruhan data aktual pada klien yang berlangganan deposito berjangka (kelas `yes`), model mampu menebak dengan benar sebesar 48.64%. Dari keseluruhan data aktual klien yang tidak berlangganan deposito berjangka (kelas `no`), model mampu menebak dengan benar sebesar 90.79%. Dari keseluruhan hasil prediksi yang mampu ditebak oleh model, model hanya mampu menebak dengan benar kelas `yes` sebesar 34.41%.
+
+```{r}
+dtree_roc <- data.frame(prediction = dtree_table$dtree_prob_yes,
+                        trueclass = as.numeric(dtree_table$y=="yes"))
+
+dtree_roc <- prediction(dtree_roc$prediction, dtree_roc$trueclass) 
+
+# ROC curve
+plot(performance(dtree_roc, "tpr", "fpr"),
+     main = "ROC")
+abline(a = 0, b = 1)
+```
+
+```{r}
+auc_ROCR_d <- performance(dtree_roc, measure = "auc")
+auc_ROCR_d <- auc_ROCR_d@y.values[[1]]
+auc_ROCR_d
+```
+
+Nilai AUC yang diperoleh sebesar 0.7149925.
+
+#### Tuning cutoff
+
+```{r}
+# model tuning - metrics function
+metrics <- function(cutoff, prob, ref, postarget, negtarget) 
+{
+  predict <- factor(ifelse(prob >= cutoff, postarget, negtarget))
+  conf <- caret::confusionMatrix(predict , ref, positive = postarget)
+  acc <- conf$overall[1]
+  rec <- conf$byClass[1]
+  prec <- conf$byClass[3]
+  spec <- conf$byClass[2]
+  mat <- t(as.matrix(c(rec , acc , prec, spec))) 
+  colnames(mat) <- c("recall", "accuracy", "precicion", "specificity")
+  return(mat)
+}
+co <- seq(0.01,0.99,length=100)
+result <- matrix(0,100,4)
+
+# apply function metrics
+for(i in 1:100){
+  result[i,] = metrics(cutoff = co[i], 
+                     prob = dtree_table$dtree_prob_yes, 
+                     ref = as.factor(ifelse(dtree_table$y == "yes", 1, 0)), 
+                     postarget = "1", 
+                     negtarget = "0")
+}
+
+# visualize
+ggplotly(tibble("Recall" = result[,1],
+           "Accuracy" = result[,2],
+           "Precision" = result[,3],
+           "Specificity" = result[,4],
+                   "Cutoff" = co) %>% 
+  gather(key = "Metrics", value = "value", 1:4) %>% 
+  ggplot(aes(x = Cutoff, y = value, col = Metrics)) +
+  geom_line(lwd = 1.5) +
+  scale_color_manual(values = c("darkred","darkgreen","orange", "blue")) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.1)) +
+  labs(title = "Tradeoff Model Perfomance") +
+  theme_light() +
+  theme(legend.position = "top",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank()))
+```
+
+Metrik yang akan digunakan adalah Recall, hal ini memungkinkan dapat sebanyak mungkin mengambil yang kemungkinan masuk kelas positif (kelas `yes`). Pada threshold 0.5, nilai Accuracy dan Specificity tinggi, nilai Recall agak rendah, dan nilai Precision rendah, yaitu 34.41%. Hal yang diinginkan adalah meningkatkan nilai Recall, maka threshold harus kurang dari 0.5, dengan konsekuensi nilai Accuracy, Specificity, dan Precision cenderung menurun. Tujuan agar nilai Recall bisa naik, maka digunakan threshold 0.2574, sehingga nilai Recall menjadi sekitar 66%. Nilai Accuracy dan Specificity menurun, tetapi masih cukup tinggi, yakni dikisaran 64%, sedangkan nilai Precision menjadi sangat rendah yakni sekitar 15%.
+
+```{r}
+dtree_table$dtree_tuning_class <- factor(ifelse(dtree_prob[,2] > 0.2574, "yes","no"))
+cm_dtree_tuning <- confusionMatrix(dtree_table$dtree_tuning_class, dtree_table$y, positive = "yes")
+eval_dtree_tuning <- tibble(Accuracy = cm_dtree_tuning$overall[1],
+                     Recall = cm_dtree_tuning$byClass[1],
+                     Specificity = cm_dtree_tuning$byClass[2],
+                     Precision = cm_dtree_tuning$byClass[3],
+                     AUC = auc_ROCR_d)
+eval_dtree_tuning
+```
+
+## Random Forest
+
+Algoritma terakhir yang digunakan adalah Random Forest. Random Forest adalah salah satu contoh algoritma berbasis ensemble yang dibangun berdasarkan metode Decision Tree dan dikenal dengan performanya yang baik. Algoritma berbasis ensemble adalah gabungan dari beberapa teknik pembelajaran mesin (machine learning) yang digabungkan menjadi satu model prediktif, dibuat untuk mengurangi kesalahan, bias, dan meningkatkan ketepatan prediksi.
+
+Random Forest bekerja dengan cara membuat banyak decision tree, kemudian dari seluruh hasil prediksi decision tree yg dibuat akan dilakukan majority voting untuk menentukan hasil prediksi akhir. Kelebihan Random Forest antara lain mereduksi bias dan variance sekaligus, model yang robust, automatic feature selection, menghasilkan out of bag sample yang bisa menggantikan data test.
+
+### Model fitting
+
+Pembuatan model klasifikasi menggunakan Random Forest bisa lebih dioptimalkan dengan penerapan teknik evaluasi model yang disebut **K-fold Cross Validation**. Teknik ini akan membagi data sebanyak **k** bagian, dan setiap bagian akan menjadi data test secara bergantian, sehingga semua data punya kesempatan menjadi data test maupun data train. Sedangkan pada Cross validation biasa hanya membagi data menjadi `data_train` dan `data_test` secara tetap. 
+
+Dari `data_train` yang dibuat, misalkan kita akan membuat model random forest dengan **K-fold Cross Validation** (k=2) dan pembuatan set k-fold tersebut dilakukan 1 kali. Pemodelan menggunakan Random Forest memerlukan waktu yang lebih lama dibandingkan algoritma yang lain, maka setelah pemodelan, object modelnya disimpan, sehingga model bisa digunakan kembali tanpa harus fit model ulang. 
+
+```{r message=F, eval=F}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+
+ctrl <- trainControl(method="repeatedcv", number = 2, repeats = 1)
+
+model_forest <- train(y ~ ., data = data_train, method = "rf", trControl = ctrl)
+
+saveRDS(model_forest, "model_rforest.RDS")
+```
+
+Dilakukan load pada model yang sebelumnya sudah dibangun mengguanakan data train.
+
+```{r}
+model_rforest <- readRDS("model_rforest.RDS")
+```
+
+Summary pada model dapat dilihat dengan menjalankan nama object modelnya, seperti di bawah ini. 
+```{r}
+model_rforest
+```
+
+Dari summary model, diketahui bahwa jumlah variabel optimal yang dipertimbangkan untuk dipecah pada setiap simpul pohon adalah 26. Model yang optimal dari Random Forest dapat dilihat sebagai berikut.
+
+```{r}
+library(randomForest)
+model_rforest$finalModel
+```
+
+Out-of-Bag (OOB) yang dihasilkan mengindikasikan bahwa model akan memiliki Accuracy sebesar 89.3% di data baru. Selanjutnya dilihat variabel-variabel yang penting dalam model Random Forest. Fungsi `varImp()` dapat digunakan untuk tujuan ini.
+
+```{r}
+varImp(model_rforest)
+```
+
+Variable paling penting dalam pembuatan random forest adalah `previous`, kemudian `cons.conf.idx` dan `nr.employed`.
+
+### Prediksi
+
+Dilakukan prediksi menggunakan data test dari model Ranom Forest yang telah dibangun. Pilihan type `prob` menghasilkan nilai probability kelas target.
+
+```{r}
+rf_prob <- predict(model_rforest, data_test, type = "prob")
+head(rf_prob)
+```
+
+Membuat dataframe yang memuat variabel target dan hasil prediksi dari model.
+
+```{r}
+rf_table <- tibble(y = data_test$y)
+rf_table$rf_prob_no <- round(rf_prob[,1],4)
+rf_table$rf_prob_yes <- round(rf_prob[,2],4)
+rf_table$rf_class <- factor(ifelse(rf_prob[,2] > 0.5, "yes","no"))
+```
+
+### Evaluasi
+
+Model Random Forest akan dilihat bagaimana kinerjanya menggunakan confusion matrix.
+
+```{r}
+cm_rf <- confusionMatrix(rf_table$rf_class, rf_table$y, positive = "yes")
+cm_rf
+```
+
+```{r}
+eval_rf <- tibble(Accuracy = cm_rf$overall[1],
+                     Recall = cm_rf$byClass[1],
+                     Specificity = cm_rf$byClass[2],
+                     Precision = cm_rf$byClass[3])
+eval_rf
+```
+
+Dari hasil yang diperoleh, dapat diambil informasi bahwa kemampuan model dalam menebak target Y sebesar 89.36%. Sedangkan dari keseluruhan data aktual pada klien yang berlangganan deposito berjangka (kelas `yes`), model mampu menebak dengan benar sebesar 41.77%. Dari keseluruhan data aktual klien yang tidak berlangganan deposito berjangka (kelas `no`), model mampu menebak dengan benar sebesar 94.09%. Dari keseluruhan hasil prediksi yang mampu ditebak oleh model, model hanya mampu menebak dengan benar kelas `yes` sebesar 41.24%.
+
+```{r}
+rf_roc <- data.frame(prediction = rf_table$rf_prob_yes,
+                        trueclass = as.numeric(rf_table$y=="yes"))
+
+rf_roc <- prediction(rf_roc$prediction, rf_roc$trueclass) 
+
+# ROC curve
+plot(performance(rf_roc, "tpr", "fpr"),
+     main = "ROC")
+abline(a = 0, b = 1)
+```
+
+```{r}
+auc_ROCR_rf <- performance(rf_roc, measure = "auc")
+auc_ROCR_rf <- auc_ROCR_rf@y.values[[1]]
+auc_ROCR_rf
+```
+
+Nilai AUC yang diperoleh sebesar 0.7430087.
+
+#### Tuning cutoff
+
+```{r}
+# model tuning - metrics function
+metrics <- function(cutoff, prob, ref, postarget, negtarget) 
+{
+  predict <- factor(ifelse(prob >= cutoff, postarget, negtarget))
+  conf <- caret::confusionMatrix(predict , ref, positive = postarget)
+  acc <- conf$overall[1]
+  rec <- conf$byClass[1]
+  prec <- conf$byClass[3]
+  spec <- conf$byClass[2]
+  mat <- t(as.matrix(c(rec , acc , prec, spec))) 
+  colnames(mat) <- c("recall", "accuracy", "precicion", "specificity")
+  return(mat)
+}
+co <- seq(0.01,0.99,length=100)
+result <- matrix(0,100,4)
+
+# apply function metrics
+for(i in 1:100){
+  result[i,] = metrics(cutoff = co[i], 
+                     prob = rf_table$rf_prob_yes, 
+                     ref = as.factor(ifelse(rf_table$y == "yes", 1, 0)), 
+                     postarget = "1", 
+                     negtarget = "0")
+}
+
+# visualize
+ggplotly(tibble("Recall" = result[,1],
+           "Accuracy" = result[,2],
+           "Precision" = result[,3],
+           "Specificity" = result[,4],
+                   "Cutoff" = co) %>% 
+  gather(key = "Metrics", value = "value", 1:4) %>% 
+  ggplot(aes(x = Cutoff, y = value, col = Metrics)) +
+  geom_line(lwd = 1.5) +
+  scale_color_manual(values = c("darkred","darkgreen","orange", "blue")) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.1)) +
+  labs(title = "Tradeoff Model Perfomance") +
+  theme_light() +
+  theme(legend.position = "top",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank()))
+```
+
+Metrik yang akan digunakan adalah Recall, hal ini memungkinkan dapat sebanyak mungkin mengambil yang kemungkinan masuk kelas positif (kelas `yes`). Pada threshold 0.5, nilai Accuracy dan Specificity tinggi, nilai Recall dan Precision rendah, masing-masing sekitar 41%. Hal yang diinginkan adalah meningkatkan nilai Recall, maka threshold harus kurang dari 0.5, dengan konsekuensi nilai Accuracy, Specificity, dan Precision cenderung menurun. Tujuan agar nilai Recall bisa naik, maka coba digunakan threshold 0.1485, nilai Recall naik menjadi sekitar 72%. Nilai Accuracy dan Specificity menurun, menjadi berada dikisaran 60%, sedangkan nilai Precision menjadi sangat rendah yakni sekitar 14%.
+
+```{r}
+rf_table$rf_tuning_class <- factor(ifelse(rf_prob[,2] > 0.1485, "yes","no"))
+cm_rf_tuning <- confusionMatrix(rf_table$rf_tuning_class, rf_table$y, positive = "yes")
+eval_rf_tuning <- tibble(Accuracy = cm_rf_tuning$overall[1],
+                     Recall = cm_rf_tuning$byClass[1],
+                     Specificity = cm_rf_tuning$byClass[2],
+                     Precision = cm_rf_tuning$byClass[3],
+                     AUC = auc_ROCR_rf)
+eval_rf_tuning
+```
+
+# Simpulan
+
+```{r}
+final_all <- as.data.frame(rbind(eval_naive_tuning, eval_dtree_tuning, eval_rf_tuning))
+rownames(final_all) <- c("Naive Bayes", "Decision Tree", "Random Forest")
+final_all
+```
+
+Pengukuran kinerja model dari algoritma Naive Bayes, Decision Tree, dan Random Forest ditampilkan dalam tabel di atas. Secara umum, nilai dari metrik Accuracy, Recall, Spesificity dan AUC pada ketiga algoritma cukup tinggi dan nilai Precision rendah. Klasifikasi ini diharapkan dapat sebanyak mungkin mengambil pelanggan yang kemungkinan masuk dalam kelas positif (kelas `yes`), sehingga metrik yang dipakai adalah Recall. Nilai recall tertinggi dihasilkan saat menggunakan Naive Bayes, diikuti oleh model Random Forest. 
+
+Model Random Forest memiliki metrik yang cukup tinggi jika dibandingkan dengan nilai metrik pada model yang lain. Selain itu, model Random Forest memiliki nilai AUC tertinggi. Oleh karena itu, model yang terbaik untuk memprediksi apakah klien akan berlangganan deposito berjangka atau tidak adalah model Random Forest.
+
+# Reference
+
+[S. Moro, P. Cortez and P. Rita. (2014). A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, In press.](http://dx.doi.org/10.1016/j.dss.2014.03.001)
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
