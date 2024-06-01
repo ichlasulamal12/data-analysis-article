@@ -1,0 +1,336 @@
+---
+title: "K-Means Clustering dan PCA"
+author: "Ichlasul Amal"
+date: "6 Februari 2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+        collapsed: true
+    number_sections: true
+    theme: cosmo
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 9999)
+```
+
+# Objektif
+
+Dataset yang digunakan dalam artikel ini adalah data pembelian tiap klien pada industri FMCG. Dataset diambil dari [UCI ML Repository](https://archive.ics.uci.edu/ml/datasets/wholesale+customers). Artikel ini akan membahas analisis pengelompokan menggunakan K-Means Clustering dan mereduksi dimensi pada dataset menggunakan metode Principal Component Analysis (PCA). Melalui analisis ini, ingin dievaluasi kemungkinan melakukan clustering untuk menghasilkan label baru pada dataset dan kemungkinan pereduksian dimensi menggunakan PCA. Selain itu, akan mdianalisis pola data untuk mendapatkan insight dengan menggabungkan PCA dan clustering. 
+
+# Read data
+
+Melakukan read pada dataset, lalu menampilkan 6 data pertama.
+
+```{r}
+wholesale <- read.csv("wholesale.csv")
+head(wholesale)
+```
+
+Menampilkan struktur dari dataset, termasuk di dalamnya tipe tiap kolomnya.
+
+```{r}
+library(tidyverse)
+glimpse(wholesale)
+```
+
+Deskripsi dari dataset sebagai berikut:
+
+- Channel: horeca (1), retail (2)
+- Region: lokasi toko; Lisbon (1), Oporto (2), Other regions (3)
+- Fresh: jumlah pembelian produk segar
+- Milk: jumlah pembelian produk susu
+- Grocery: jumlah pembelian produk grocery
+- Frozen: jumlah pembelian produk es/beku
+- Detergents_Paper: jumlah pembelian produk detergent & kertas
+- Delicassen: jumlah pembelian produk delicatessen (berkualitas tinggi)
+
+# Data wrangling
+
+Variabel `Channel` belum tepat tipe datanya, sehingga akan diubah tipenya menjadi factor/kategorik. Selain itu, variabel `Region` akan diremove karena tidak digunakan dalam analisis.
+
+```{r}
+wholesale <- wholesale %>% 
+  select(-Region) %>% 
+  mutate(Channel = as.factor(Channel))
+```
+
+Selanjutnya cek keberadaan missing value pada dataset.
+
+```{r}
+anyNA(wholesale)
+```
+
+Hasil di atas menunjukkan bahwa tidak terdapat missing value pada dataset.
+
+# Analisis data eksplorasi
+
+Bagian EDA, akan dilakukan eksplorasi pada data untuk mengetahui karakteristik secara umum dari dataset. Dilakukan pembuatan box plot antara variabel kategorik yaitu `Channel` terhadap setiap variabel numerik. 
+
+```{r}
+library(cowplot)
+
+p1 <- ggplot(wholesale, aes(Channel, Fresh, fill = Channel)) + 
+  geom_boxplot(show.legend = F) +
+  theme_minimal() + labs(title = "Fresh")
+
+p2 <- ggplot(wholesale, aes(Channel, Milk, fill = Channel)) + 
+  geom_boxplot(show.legend = F) + 
+  theme_minimal() + labs(title = "Milk")
+
+p3 <- ggplot(wholesale, aes(Channel, Grocery, fill = Channel)) + 
+  geom_boxplot(show.legend = F) +
+  theme_minimal() + labs(title = "Grocery")
+
+p4 <- ggplot(wholesale, aes(Channel, Frozen, fill = Channel)) + 
+  geom_boxplot(show.legend = F) + 
+  theme_minimal() + labs(title = "Frozen")
+
+p5 <- ggplot(wholesale, aes(Channel, Detergents_Paper, fill = Channel)) + 
+  geom_boxplot(show.legend = F) + 
+  theme_minimal() + labs(title = "Detergents Paper")
+
+p6 <- ggplot(wholesale, aes(Channel, Delicassen, fill = Channel)) + 
+  geom_boxplot(show.legend = F) + 
+  theme_minimal() + labs(title = "Delicassen")
+
+plot_grid(p1, p2, p3, p4, p5, p6)
+```
+
+Berdasarkan box plot di atas, `Channel` dengan kode 2 yaitu klien Retail, cenderung nilai pembeliannya lebih tinggi daripada `Channel` dengan kode 1 yaitu Horeca. Guna menemukan pola yang lebih menarik dan belum ditemukan pada dataset, akan digunakan metode clustering menggunakan K-Means.
+
+Selanjutnya akan dilihat apakah ada korelasi yang tinggi antar variabel numerik. Korelasi yang kuat dalam beberapa variabel menyiratkan bahwa dapat dilakukan pengurangan dimensi atau jumlah fitur menggunakan metode PCA.
+
+```{r}
+library(GGally)
+ggcorr(wholesale, low = "navy", high = "darkred", hjust = 1, layout.exp = 2, label = T, label_size = 2.9)
+```
+
+Hasil korelasi di atas menunjukkan bahwa terdapat korelasi yang kuat pada beberapa variabel. Variabel-variabel tersebut adalah `Milk`, `Grocery`, dan `Detergents_Paper`. Hasil ini menunjukkan bahwa dataset ini memiliki multikolinieritas dan mungkin tidak cocok untuk berbagai algoritma klasifikasi (yang mengasumsikan non-multikolinieritas).
+
+PCA dapat dilakukan agar data ini menghasilkan data non-multikolinieritas, juga mengurangi dimensi data dan menyimpan informasi sebanyak mungkin. Hasil analisis ini dapat dimanfaatkan lebih lanjut untuk tujuan klasifikasi dengan komputasi yang lebih rendah.
+
+# Data pre-processing
+
+Dilakukan standarisasi pada dataset, hal agar data memiliki range yang sama. Ini dilakukan karena variabel-variabel dalam dataset memiliki satuan dan range yang berbeda.
+
+```{r}
+wholesale_z <- scale(wholesale[,-1])
+```
+
+# Clustering
+
+Clustering adalah pengelompokan data berdasarkan karakteristiknya. Clustering bertujuan untuk menghasilkan cluster dimana:
+
+- Observasi di satu cluster yang sama yang memiliki karakteristik yang mirip.
+- Observasi dari cluster yang berbeda memiliki karakteristik yang berbeda.
+
+## Banyak cluster optimal
+
+Langkah dalam clustering, pertama adalah menentukan banyak cluster yang optimal. Metode clustering, yang harus dilakukan adalah meminimalkan jumlah kuadrat dalam cluster. Ini berarti jarak antar observasi dalam cluster yang sama minimal. Untuk mendapatkan banyak cluster yang optimal dapat digunakan 3 metode yaitu metode elbow, metode silhouette, dan statistik gap. kemudian menentukan banyak cluster berdasarkan voting mayoritas.
+
+### Metode elbow
+
+Aturan dalam menggunakan metode elbow untuk mengetahui banyak cluster yang optimal adalah memilih banyak cluster di area “bend of an elbow”, dimana grafik total within sum of squares mulai stagnan seiring dengan bertambahnya jumlah cluster.
+
+```{r}
+library(factoextra)
+fviz_nbclust(x = wholesale_z, FUNcluster = kmeans, method = "wss", k.max = 15) + 
+  labs(subtitle = "Elbow method")
+```
+
+Berdasarkan grafik di atas, diketahui bahwa 4 cluster sudah cukup baik karena tidak ada penurunan yang signifikan dalam total within sum of squares pada jumlah cluster yang lebih banyak. Metode ini mungkin belum cukup baik dimana banyak cluster optimal kurang jelas.
+
+### Metode silhouette
+
+Metode silhouette mengukur koefisien silhouette, dengan menghitung rata-rata jarak intra-cluster dan rata-rata jarak cluster terdekat untuk setiap pengamatan. Banyak cluster yang optimal ditentukan dengan memilih banyak cluster dengan skor silhouette tertinggi.
+
+```{r}
+fviz_nbclust(wholesale_z, kmeans, "silhouette", k.max = 15) + 
+  labs(subtitle = "Silhouette method")
+```
+
+Berdasarkan metode silhouette, banyak cluster dengan skor tertinggi dianggap sebagai k-cluster yang optimal. Grafik di atas menunjukkan bahwa banyak cluster yang optimal adalah 2.
+
+### Statistik gap
+
+Statistik gap bekerja dengan cara membandingkan total dalam variasi intra-cluster untuk nilai k yang berbeda dengan nilai yang diharapkan di bawah distribusi referensi nol dari data. Perkiraan cluster optimal akan menjadi nilai yang memaksimalkan statistik gap.
+
+```{r}
+fviz_nbclust(wholesale_z, kmeans, "gap_stat", k.max = 15) + 
+  labs(subtitle = "Gap Statistic method")
+```
+
+Berdasarkan metode statistik gap, k yang optimal adalah 4.
+
+Dua dari tiga metode menunjukkan bahwa k = 4 adalah banyak cluster yang optimal.
+
+## K-Means clustering
+
+K-means adalah *centroid-based clustering algorithms*. Centroid sendiri berarti titik pusat. K-means merupakan proses yang berulang dari:
+
+1. **Random initialization**: meletakkan $k$ centroid secara random
+2. **Cluster assignment**: assign masing-masing observasi ke cluster terdekat, berdasarkan perhitungan jarak
+3. **Centroid update**: menggeser centroid ke rata-rata (means) dari cluster yang terbentuk
+4. Ulangi langkah 2 dan 3 sampai tidak ada observasi yang clusternya berubah lagi
+
+```{r}
+set.seed(123)
+km <- kmeans(wholesale_z, centers = 4)
+km
+```
+
+Perbandingan antara jumlah jarak kuadrat terbobot dari tiap centroid ke rata-rata global (between_SS) dengan jumlah jarak kuadrat dari tiap observasi ke rata-rata global (total_SS) adalah 48,6%, artinya hampir setengah penjumlahan jarak kuadrat berasal dari jarak antar klaster. Dengan demikian, dapat disimpulkan bahwa data terkluster dengan cukup baik karena pengamatan dalam cluster yang sama memiliki jarak atau variasi yang cukup kecil. Jumlah anggota pada setiap cluster tidak merata.
+
+```{r}
+wholesale$cluster <- as.factor(km$cluster)
+head(wholesale)
+```
+
+## Analisis
+
+K-means clustering yang dilakukan menggunakan k = 4, hal ini berbeda dengan segmentasi dari dataset awal yang hanya 2 yaitu Retail dan Horeca. Kemudian temuan menarik yang bisa digali dari analisis cluster dapat dilakukan menggunakan nilai centroid pada masing-masing cluster.
+
+```{r}
+wholesale %>% 
+  group_by(cluster) %>% 
+  summarise_if(is.numeric, "mean") %>% 
+  mutate_if(is.numeric, 
+            .funs = "round", 
+            digits = 2)
+```
+
+Selain menggunakan tabel, centroid pada masing-masing cluster bisa dilihat visualisasinya menggunakan radar plot.
+
+```{r}
+library(ggradar)
+library(scales)
+dat_radar <- wholesale %>% 
+             group_by(cluster) %>% 
+             summarise_if(is.numeric, "mean") %>% 
+             rename(group = cluster) %>% 
+             mutate(group = as.character(group)) %>%
+             mutate_at(vars(-group),
+             funs(rescale))
+
+ggradar(dat_radar, 
+        grid.label.size = 3,
+        axis.label.size = 3, 
+        group.point.size = 4,
+        group.line.width = 1.5,
+        legend.text.size= 8)
+```
+
+Beberapa hal menarik yang bisa didapatkan dari centroid diantaranya:
+
+- `Cluster 1`: cluster ini memiliki jumlah pembelian produk segar dan es/beku yang tertinggi, namun rendah dalam jumlah pembelian produk detergen dan kertas.
+- `Cluster 2`: cluster ini memiliki jumlah pembelian yang sedang pada produk susu, grocery, detergen dan kertas serta delicatessen dan rendah pada jumlah pembelian produk yang lain.
+- `Cluster 3`: cluster ini memiliki jumlah pembelian produk susu, gorcery, detergen dan kertas, serta produk delicatessen (berkualitas tinggi) yang tertinggi dan jumlah pembelian produk yang lain juga cukup tinggi.
+- `Cluster 4`: cluster ini memiliki jumlah pembelian terendah pada produk susu, grocery dan delicatessen serta cukup rendah pada jumlah pembelian produk yang lain.
+
+# Principal component analysis
+
+Principal component analysis (PCA) adalah prosedur statistik yang menggunakan transformasi ortogonal untuk mengubah serangkaian pengamatan dari variabel yang mungkin berkorelasi menjadi satu set nilai variabel yang tidak berkorelasi linier yang disebut principal component. Transformasi ini didefinisikan sedemikian rupa sehingga komponen utama pertama memiliki kemungkinan variansi terbesar, ini berarti menyumbang sebanyak mungkin variabilitas dalam data, dan setiap komponen berikutnya pada gilirannya memiliki variansi setinggi mungkin di bawah batasan tersebut yang ortogonal dengan komponen sebelumnya. Vektor yang dihasilkan adalah himpunan basis ortogonal yang tidak berkorelasi yang masing-masing merupakan kombinasi linier dari variabel dan berisi n pengamatan. PCA sensitif terhadap penskalaan relatif dari variabel asli.
+
+Pembuatan PCA dari dataset wholesale. Lalu akan dilihat nilai eigen dan persentase variansi yang dijelaskan oleh masing-masing dimensi. Nilai eigen mengukur jumlah variasi yang dipertahankan oleh setiap komponen utama. Nilai eigen besar untuk PC pertama dan lebih kecil untuk PC berikutnya. Artinya, PC pertama sesuai dengan petunjuk dengan jumlah variasi maksimum dalam kumpulan data.
+
+```{r}
+library(FactoMineR)
+wholesale_pca <- PCA(wholesale, 
+                      scale.unit = T, 
+                      ncp = 6, 
+                      graph = F, 
+                      quali.sup = c(1,8))
+summary(wholesale_pca)
+```
+
+Melalui PCA, dapat dipertahankan beberapa komponen utama yang informatif (variansi kumulatif tinggi) dari dataset Wholesale untuk melakukan pengurangan/reduksi dimensi. Keuntungan dari hal ini adalah dapat mengurangi dimensi dataset sambil juga menyimpan informasi sebanyak mungkin.
+
+```{r}
+fviz_eig(wholesale_pca, ncp = 6, addlabels = T, main = "Variance explained by each dimensions")
+```
+
+Sekitar 44% varian dapat dijelaskan hanya dengan menggunakan dimensi pertama. Pada studi ini, akan disimpan sekitar 80% informasi dari dataset. Ini berati cukup dengan menggunakan 3 dimensi. Dengan demikian, pengurangan dimensi sebesar 50%. Selanjutnya dapat diekstrak nilai PC1-PC3 dari semua pengamatan dan memasukkannya ke dalam dataframe baru. Dataframe ini nantinya dapat dianalisis menggunakan teknik klasifikasi pada machine learning atau untuk tujuan yang lain.
+
+```{r}
+wholesale_x <- data.frame(wholesale_pca$ind$coord[,1:3])
+
+wholesale_xx <- cbind(wholesale_x, Channel = wholesale$Channel)
+head(wholesale_xx)
+```
+
+Individual observations map menunjukkan dimana masing-masing pengamatan diposisikan dalam PC1 dan PC2. Pada penggunaan 2 PC pertama, dapat dilihat bahwa ada banyak outlier di dataset. Analisis lebih lanjut dapat dilakukan untuk memeriksanya.
+
+```{r}
+fviz_pca_ind(wholesale_pca, 
+             habillage = 1,
+             addEllipses = T)
+```
+
+Grafik di atas adalah individual observations map dari hasil PCA dengan pembagian kategori menggunakan `Channel`. Hasilnya menunjukkan bahwa sebagian besar observasi ditiap kategori memiliki nilai `cos2` yang hampir sama, berada di range 0-5. `cos2` atau nilai cosinus kuadrat sendiri menunjukkan pentingnya principal component untuk pengamatan tertentu yaitu vektor variabel asli, nilai cos2 dapat membantu menemukan komponen yang penting untuk menginterpretasikan pengamatan. Menggunakan 2 PC, sudah dapat mengakomodasi varian yang cukup besar, sekitar 70%.
+
+```{r}
+fviz_pca_ind(wholesale_pca, 
+             habillage = 8, 
+             addEllipses = T)
+```
+
+Grafik di atas adalah individual observations map dari hasil PCA dengan pembagian kategori menggunakan hasil `cluster`. Hasilnya menunjukkan bahwa cluster 1,2 dan 4 memiliki observasi yang berdekatan. Jika menggunakan 4 pembagian kategori, sedikit terdapat data outlier dibandingkan saat menggunakan 2 kategori. Pada cluster 3, terdiri atas lebih sedikit observasi jika dibandingkan cluster yang lain dan juga cluster ini memiliki variansi yang besar pada observasinya, terlihat dari besarnya ellips pada cluster ini.
+
+Selanjutnya adalah mengenai variable factor map. Pada bagian sebelumnya, observasi diwakili oleh proyeksi, maka variabel diwakili oleh korelasinya. Semakin dekat suatu variabel dengan lingkaran korelasi, semakin baik untuk dapat direkonstruksi variabel ini dari dua PC pertama. Semakin dekat ke tengah plot suatu variabel, semakin kurang penting untuk dua PC pertama.
+
+```{r}
+fviz_pca_var(wholesale_pca, 
+             select.var = list(contrib = 6), 
+             col.var = "contrib", 
+             repel = T)
+```
+
+Plot di atas menunjukkan bahwa variabel terletak di dalam lingkaran, artinya dibutuhkan lebih dari dua PC untuk merepresentasikan data dengan sempurna. Warna menunjukkan kontribusi masing-masing variabel. Besar kontribusi variabel dalam PC tertentu dinyatakan dalam persentase. Variabel yang berkorelasi dengan PC1 dan PC2 adalah yang paling penting dalam menjelaskan variabilitas dalam dataset. Variabel yang tidak berkorelasi dengan PC mana pun atau berkorelasi dengan dimensi terakhir adalah variabel dengan kontribusi rendah dan dapat dihapus untuk menyederhanakan analisis secara keseluruhan.
+
+Variabel yang memberikan kontribusi tinggi pada PC1 adalah Grocery, detergents_Paper, dan Milk, sedangkan sisanya berkontribusi lebih terhadap PC2. Tidak terdapat variabel yang memiliki korelasi negatif baik pada PC1 maupun PC2.
+
+PCA dapat diintegrasikan dengan hasil K-means Clustering untuk membantu memvisualisasikan dataset dalam dimensi yang lebih sedikit daripada fitur aslinya.
+
+```{r}
+fviz_cluster(object = km, data = wholesale_z, labelsize = 0) + 
+  theme_light()
+```
+
+Pada visualisasi di atas, cluster terlihat sedikit berpotongan satu sama lain. Ini karena tidak memiliki cukup dimensi untuk mewakilinya. Seihngg dapat ditambahkan 1 dimensi lagi menggunakan plotly untuk melihat apakah cluster kita masih mengelompok.
+
+```{r}
+library(plotly)
+
+wholesale_xc <- cbind(wholesale_x, cluster = wholesale$cluster)
+
+plot_ly(wholesale_xc, x = ~Dim.1, y = ~Dim.2, z = ~Dim.3, 
+        color = ~cluster, colors = c("black", "red", "green", "blue")) %>% 
+  add_markers() %>% 
+  layout(scene = list(xaxis = list(title = "Dim.1"), 
+                      yaxis = list(title = "Dim.2"), 
+                      zaxis = list(title = "Dim.3")))
+```
+
+Berdasarkan grafik 3 dimensi, K-Means Clustering sudah berhasil mengelompokkan dataset dengan baik. Cluster 3 terlihat berjauhan dengan kumpulan cluster yang lain. Kemudian ada satu data yang ekstrim, karena berjauhan dari kumpulan data yang lain.
+
+# Simpulan
+
+Simpulan yang dapat diambil dari analisis K-Means Clustering dan PCA dalam artikel ini sebagai berikut:
+
+- Pengelompokan dapat dilakukan pada dataset ini, dengan k yang optimal sebanyak 4 cluster. Ini berbeda dari pengelompokan yang terdapat pada dataset awal yaitu sebanyak 2 kelompok/cluster.
+- Perbandingan antara jumlah jarak kuadrat terbobot dari tiap centroid ke rata-rata global (between_SS) dengan jumlah jarak kuadrat dari tiap observasi ke rata-rata global (total_SS) adalah 48,6%.
+- Cluster 3 secara rata-rata memiliki jumlah pembelian produk yang tinggi, berbanding terbalik dengan cluster 4 yang rendah dalam rata-rata jumlah pembelian produk.
+- Pereduksian dimensi dapat dilakukan pada dataset ini. Diambil sebanyak 3 PC, yang sudah dapat mewakili informasi sebanyak 84,8% dan dapat mengurangi sebanyak 50% banyak dimensi.
+- Dataset yang sudah dilakukan pereduksian dimensi dapat digunakan untuk analisis lebih lanjut menggunakan supervised learning seperti klasifikasi.
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
