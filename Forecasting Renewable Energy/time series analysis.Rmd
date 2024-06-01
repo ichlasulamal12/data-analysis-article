@@ -1,0 +1,264 @@
+---
+title: "Analisis Time Series pada Renewable Energy Indonesia"
+author: "Ichlasul Amal"
+date: "14 Februari 2021"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 9999)
+```
+
+# Objektif
+
+Artikel ini akan membahas penerapan analisis time series dalam sektor lingkungan, yaitu renewable energy di Indonesia. Renewable energy adalah penggunaan dari listrik terbarukan (bagian listrik yang dihasilkan oleh pembangkit listrik terbarukan) dalam jumlah listrik yang dihasilkan oleh semua jenis pembangkit listrik.
+
+Metode yang akan dipakai adalah exponential smooothing dan ARIMA. Metode ini berguna untuk melakukan forecasting pada data time series. Analisis ini dapat digunakan untuk melihat karakteristik atau pola pada penggunaan dan pengelolaan energi di Indonesia. Dataset berupa data tahunan yang diambil dari macrotrends dan dapat diakses melalui tautan [renewable energy](https://www.macrotrends.net/countries/IDN/indonesia/renewable-energy-statistics).
+
+# Read data
+
+Melakukan read pada dataset yang akan digunakan dalam analisis.
+
+```{r}
+renewable <- read.csv("renewable.csv", stringsAsFactors = F)
+```
+
+Selanjutnya melihat struktur dari tiap dataset, termasuk di dalamnya tipe tiap kolomnya.
+
+```{r}
+str(renewable)
+```
+
+# Data pre-processing
+
+Melakukan perubahan pada tipe data yang belum sesuai, yaitu kolom date menjadi tipe Date dan menghapus kolom annual change atau selisih nilai di tiap tahun, karena tidak dibutuhkan dalam analisis time series.
+
+```{r}
+library(lubridate)
+library(tidyverse)
+
+renewable <- renewable %>% 
+  select(-Annual.Change) %>% 
+  mutate(date = mdy(date))
+```
+
+Selanjutnya mengecek apakah terdapat missing value atu tidak dalam dataset renewable.
+
+```{r}
+library(padr)
+
+renewable %>% 
+  pad() %>% 
+  anyNA()
+```
+
+Hasil output menunjukkan bahwa tidak terdapat missing value pada dataset, sehingga proses analisis time series dapat dilanjutkan ke tahap berikutnya.
+
+# Analisis data eksplorasi
+
+Bagian ini akan menjelajah dataset yang lebih dalam, sehingga dapat diketahui karakteristik awal dari data. Fungsi range digunakan untuk mengetahui data paling awal dan akhirnya.
+
+```{r}
+range(renewable$date)
+```
+
+Data awal dari dataset renewable ini adalah pada tahun 1990 dan berakhir di tahun 2015, dengan pengambilan data pada setiap akhir tahun.
+
+Dataset renewable dibuat menjadi bertipe data time series. Isian `start` diisi pada data tahun pertama, `frequency` diisi dengan satu karena data tahunan.
+
+```{r}
+renewable_ts <- ts(renewable$X..of.Electricity.from.Renewables, start = 1990, frequency = 1)
+```
+
+Selanjutnya dilihat plot dari dataset. Plot renewable energy dapat ditampilkan sebagi berikut.
+
+```{r}
+library(forecast)
+
+renewable_ts %>% 
+  autoplot()
+```
+
+Berdasarkan hasil plot, data historical renewable energy cenderung mengalami penurunan. Nilai paling rendah terjadi pada tahun 1997. Data secara visual belum stasioner, namun untuk mengetahui secara statistik, stasioneritas data dapat dilihat melalui uji Augmented Dickey-Fuller.
+
+```{r}
+library(tseries)
+
+renewable_ts %>% 
+  adf.test()
+```
+
+Hipotesis uji Augmented Dickey-Fuller:
+
+-$H_0$: data tidak stasioner
+
+-$H_1$: data stasioner
+
+Uji Augmented Dickey-Fuller pada data renewable energy menunjukkan hasil yaitu data belum stasioner, karena p-value = 0.1162 masih lebih tinggi dibandingkan alpha = 0.05, sehingga $H_0$ gagal ditolak.
+
+Data renewable energy dilakukan differencing untuk mengatasi data belum stasioner. Proses differencing dilakukan sebanyak dua kali. Ini karena proses differencing satu kali masih belum dapat membuat data stasioner.
+
+```{r}
+renewable_ts %>% 
+  diff() %>% 
+  diff() %>% 
+  adf.test()
+```
+
+Uji Augmented Dickey-Fuller pada data renewable energy dengan data telah dilakukan differencing seanyak dua kali menunjukkan bahwa data telah stasioner, karena p-value = 0.01 lebih kecil dibandingkan alpha = 0.05, sehingga $H_0$ ditolak.
+
+```{r}
+renewable_ts %>% 
+  diff() %>% 
+  diff() %>% 
+  autoplot()
+```
+
+Plot yang dihasilkan setelah data dilakukan differencing dua kali telah stabil, sehingga secara visual data telah stasioner.
+
+# Cross validation
+
+Dataset renewable energy akan dilakukan cross validation, yaitu pembagian dataset menjadi data train dan data test. Data test diambil pada 10 tahun terakhir dari dataset dan sisa datanya adalah menjadi data train.
+
+```{r}
+train_renewable <- head(renewable_ts, n = length(renewable_ts) - 1*10)
+test_renewable <- tail(renewable_ts, n = 1*10)
+```
+
+# Pembuatan dan evaluasi model
+
+Bagian ini membahas pembuatan model menggunakan exponential smoothing dan ARIMA. Model-model yang dibuat kemudian dibandingkan bagaimana kinerjanya. Kinerja yang paling baik yaitu yang memiliki error (menggunakan Mean Absolute Percentage Error (MAPE)) paling kecil. MAPE adalah salah satu cara dalam statistika untuk mengukur kinerja model. MAPE dihitung berdasarkan rata-rata dari nilai absolut dari selisih nilai aktual dan nilai prediksi yang lalu dibagi dengan nilai aktual. Model pertama yang akan dibangun adalah Holt's Exponential Smoothing. Model ini mengasumsikan data memiliki pola trend.
+
+```{r}
+library(MLmetrics)
+
+model_hw_r <- HoltWinters(train_renewable, gamma = F)
+forecast_hw_r <- forecast(model_hw_r, h = 1*10)
+mape_hw_r <- MAPE(y_pred = forecast_hw_r$mean, y_true = test_renewable)
+```
+Model selanjutnya yang dicobakan adalah ARIMA. Sebelum masuk ke pemodelan ARIMA, akan dicari nilai p, d, dan q yang mungkin menggunakan plot Autocorrelation Function (ACF) dan Partial Autocorrelation Function (PACF). Fungsi yang bisa digunakan adalah `tsdisplay()`.
+
+```{r}
+train_renewable %>% 
+  diff() %>% 
+  diff() %>% 
+  tsdisplay()
+```
+
+- Dies down/decay: mengalami penurunan atau kenaikan secara lambat
+
+- cuts off lag: mengalami penurunan atau kenaikan secara cepat
+
+Plot ACF cuts off setelah lag 1, sehingga opsi order q bisa diisi dengan 1. Pada plot PACF, cuts off setelah lag 2, sehingga opsi order p bisa diisi dengan 1 dan 2. Maka kombinasi model ARIMA(p,d,q) yang dapat dibentuk sebagai berikut:
+
+1. ARIMA(1,2,1)
+2. ARIMA(2,2,1)
+
+```{r}
+arima1_r <- Arima(y = train_renewable, order = c(1,2,1), seasonal = F)
+arima2_r <- Arima(y = train_renewable, order = c(2,2,1), seasonal = F)
+```
+
+Lalu dilihat nilai AIC masing-masing model ARIMA.
+
+```{r}
+arima1_r$aic
+arima2_r$aic
+```
+Model arima1_r memiliki nilai AIC terkecil, sehingga model ARIMA ini yang akan digunakan untuk melakukan Forecasting dengan model ARIMA. Forecasting dilakukan pada 10 data (tahun) ke depan.
+
+```{r}
+forecast_arima_r <- forecast(arima1_r, h=1*10)
+mape_arima_r <- MAPE(forecast_arima_r$mean, test_renewable)
+```
+
+Model ARIMA lain yang bisa dilakukan adalah menggunakan fungsi `auto.arima()`. Fungsi ini akan secara otomatis memilih model ARIMA yang terbaik berdasarkan nilai AIC, AICc atau BIC.
+
+```{r}
+auto_arima_r <- auto.arima(train_renewable)
+forecast_auto_arima_r <- forecast(auto_arima_r, h=1*10)
+mape_auto_arima_r <- MAPE(y_pred = forecast_auto_arima_r$mean, y_true = test_renewable)
+```
+
+Setelah dilakukan forecast pada semua model, dilakukan pembuatan plot forecast dari setiap model dan plot data test.
+
+```{r}
+test_renewable %>% 
+  autoplot(series = "test") +
+  autolayer(forecast_hw_r$mean, series = "forecast exponential smoothing") +
+  autolayer(forecast_arima_r$mean, series = "forecast arima") +
+  autolayer(forecast_auto_arima_r$mean, series = "forecast auto arima")
+```
+
+Berdasarkan plot forecast, model exponential smoothing (Holt's Exponential Smoothing) lebih mendekati pada nilai aslinya. Sehingga secara visual, model exponential smoothing adalah model yang terbaik untuk melakukan forecast pada dataset renewable energy.
+
+Semua nilai MAPE yang telah diperoleh dari setiap model, dijadikan dalam satu dataframe, kemudian diurutkan dari nilai terkecil ke terbesar.
+
+```{r}
+perf <- as.data.frame(rbind(mape_hw_r, mape_arima_r, mape_auto_arima_r))
+colnames(perf) <- c("MAPE")
+perf %>% arrange(MAPE)
+```
+
+Nilai MAPE terkecil adalah model exponential smoothing (Holt's Exponential Smoothing), dengan nilai MAPE sebesar 0.08864083 atau 8.86%. Nilai ini kurang dari 10%, sehingga model memiliki tingkat akurasi peramalan yang tinggi. Berikut ditampilkan hasil forecast, juga interval konfidensi 80% dan interval konfidensi 95%.
+
+```{r}
+forecast_hw_r
+```
+
+Hasil forecast menggunakan exponential smoothing (Holt's Exponential Smoothing) lebih detail dapat ditampilkan dalam plot berikut ini.
+
+```{r}
+plot(forecast_hw_r)
+```
+
+Hasil forecast ditampilkan dalam garis warna biru, sedangkan interval konfidensi 80% ditampilkan dalam area yang berwarna abu-abu tua, dan interval konfidensi 95% ditampilkan dalam area berwarna abu-abu muda.
+
+# Uji asumsi
+
+Bagian ini membahas uji asumsi pada model. Uji asumsi pada analisis time series ada 2, yaitu uji Ljung-Box dan normality residual.
+
+Hipotesis uji Ljung-Box sebagai berikut:
+
+- $H_0$: residual has no-autocorrelation
+- $H_1$: residual has autocorrelation
+
+Uji Ljung-Box digunakan untuk mengecek ada/tidaknya autokorelasi pada hasil forecasting time series.
+
+```{r}
+Box.test(forecast_hw_r$residuals, type = "Ljung-Box")
+```
+Hasil uji Ljung-Box menunjukkan bahwa model tidak memiliki autokorelasi pada residualnya karena p-value lebih dari alpha = 0.05, sehingga $H_0$ gagal ditolak. Uji asumsi berikutnya adalah normality residual.
+
+Hipotesis uji normality residual sebagai berikut:
+
+- $H_0$: residual menyebar normal
+- $H_1$: residual tidak menyebar normal
+
+Pengecekan normality residual pada hasil forecasting time series bisa dilakukan menggunakan shapiro test.
+
+```{r}
+shapiro.test(forecast_hw_r$residuals)
+```
+P-value yang dihasilkan adalah 0.3649, maka lebih dari alpha = 0.05, sehingga $H_0$ gagal ditolak. Ini berati residual pada model berdistribusi normal.
+
+# Simpulan
+
+Peramalan pada persentase penggunaan listrik terbarukan di Indonesia dapat dilakukan menggunakan metode exponential smoothing dan ARIMA. Metode exponential smoothing yang digunakan adalah Holt's Exponential Smoothing, karena pada dataset hanya terdapat efek trend dan tidak terdapat efek seasonal. ARIMA yang digunakan dapat dibagi menjadi dua, pertama dengan cara mencari parameter p, d, dan q secara manual menggunakan plot ACF dan PACF, dan yang kedua menggunakan fungsi `auto.arima()` yang akan mencari model ARIMA terbaik berdasarkan nilai AIC. 
+
+Model terbaik yang didapatkan adalah saat menggunakan metode exponential smoothing, ini dilihat dari nilai MAPE yang paling kecil, yaitu sebesar 8.86%. Model exponential smoothing memiliki akurasi peramalan yang tinggi karena memiliki nilai MAPE yang kurang dari 10%. Uji asumsi pada model exponential smoothing, yaitu independensi residual dan normalitas residual semuanya signifikan. Sehingga tidak terdapat korelasi residual antar lag dan residual berdistribusi normal.
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
