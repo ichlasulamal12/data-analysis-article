@@ -1,0 +1,297 @@
+---
+title: "Klasifikasi Menggunakan Regresi Logistik dan K-NN"
+author: "Ichlasul Amal"
+date: "January 18, 2021"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: 
+        collapsed: false
+    number_sections: true
+    theme: united
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 9999)
+```
+
+# Objektif
+
+Pada artikel ini, dilakukan penerapan algoritma klasifikasi `Regresi Logistik` dan `K-Nearest Neighbors` (K-NN) di industri FMCG. Dataset yang digunakan berasal dari data pembelian tiap klien. Klasifikasi yang dilakukan adalah segmentasi klien yang terdiri dari dua kategori, yaitu Horeca (Hotel, Restaurant, Cafe) dan Retail.
+
+# Read data
+
+```{r}
+wholesale <- read.csv("data_input/wholesale.csv")
+head(wholesale)
+```
+
+```{r}
+library(tidyverse)
+glimpse(wholesale)
+```
+
+Deskripsi dari tiap kolom sebagai berikut: 
+
+- Channel: horeca (1), retail (2)
+- Region: lokasi toko; Lisbon (1), Oporto (2), Other regions (3)
+- Fresh: jumlah pembelian produk segar
+- Milk: jumlah pembelian produk susu
+- Grocery: jumlah pembelian produk grocery
+- Frozen: jumlah pembelian produk es/beku
+- Detergents_Paper: jumlah pembelian produk detergent & kertas
+- Delicassen: jumlah pembelian produk delicatessen (berkualitas tinggi)
+
+# Data wrangling
+
+Tipe data masih ada yang belum tepat, yaitu variabel `Channel` yang seharusnya bertipe kategorik. Selain itu, variabel `Region` akan diremove karena tidak digunakan dalam analisis.
+```{r}
+wholesale <- wholesale %>% 
+  select(-Region) %>% 
+  mutate(Channel = factor(Channel, levels = c(1, 2), labels = c("Horeca", "Retail")))
+wholesale
+```
+
+# Analisis data eksplorasi
+
+Sebelum masuk ke pemodelan, perlu dicek terlebih dahulu proporsi kategori pada variabel target, yaitu `Channel`
+```{r}
+prop.table(table(wholesale$Channel))
+```
+
+Proporsi pada variabel target 68:32, proporsi ini sudah bisa dikatakan seimbang. Selanjutnya melakukan cek range pada variabel prediktor.
+```{r}
+summary(wholesale)
+```
+
+Range pada variabel prediktor di atas berbeda-beda, hal ini dapat mengakibatkan hasil yang kurang tepat dalam klasifikasi menggunakan K-NN, karena K-NN mengukur jarak antara pasangan sampel dan jarak ini juga dipengaruhi oleh unit pengukuran, sehingga variabel prediktor perlu untuk dilakukan scaling.
+
+# Regresi logistik
+
+Algoritma pertama yang akan digunakan dalam analisis klasifikasi segmentasi kelas ini adalah `Regresi Logistik`.
+
+## Split data
+
+Hal yang perlu dilakukan selanjutnya adalah membagi data menjadi data train dan data test. Data train digunakan untuk membangun model, sedangkan data test digunakan untuk menguji model yang sudah dibuat dan mengetahui kinerja model. Perbandingan untuk data train dan data test adalah 80:20.
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(123)
+
+intrain <- sample(nrow(wholesale), nrow(wholesale)*0.8)
+wholesale.train <- wholesale[intrain, ]
+wholesale.test <- wholesale[-intrain, ]
+```
+
+Cek proporsi variabel target pada data train
+```{r}
+prop.table(table(wholesale.train$Channel))
+```
+
+Proporsi pada variabel target di data train 68:32, proporsi ini sudah bisa dikatakan seimbang, sehingga bisa dilanjutkan pada pemodelan.
+
+## Pemodelan
+
+```{r}
+model_log <- glm(Channel ~ ., data = wholesale.train, family = "binomial")
+summary(model_log)
+```
+
+Pada penggunaan semua variabel prediktor, disimpulkan masih lebih banyak variabel prediktor yang tidak signifikan terhadap variabel target. Dicoba melakukan pemodelan dengan metode `step wise`.
+
+```{r}
+backward <- step(model_log, direction = "backward")
+```
+
+Menggunakan metode backward pada `step wise`, diperoleh model sebagai berikut:
+```{r}
+summary(backward)
+```
+
+Variabel prediktor yang ada di model backward telah signifikan berpengaruh terhadap variabel target. 
+
+## Prediksi
+
+Cek label untuk peluang yang mendekati 1
+```{r}
+levels(wholesale.train$Channel)
+```
+
+Selanjutnya melakukan prediksi menggunakan data test, dengan hasil adalah sebuah probabilitas
+```{r}
+wholesale.test$log.Risk <- predict(backward, newdata = wholesale.test, type = "response")
+```
+
+```{r}
+ggplot(wholesale.test, aes(x=log.Risk)) +
+  geom_density(lwd=0.5) +
+  labs(title = "Distribusi Peluang Data Prediksi") +
+  theme_light()
+```
+
+Pada grafik diatas, dapat diinterpretasikan bahwa hasil prediksi yang dilakukan lebih condong ke arah 0 yang artinya Horeca (Hotel, Restaurant, Cafe).
+
+Kemudian ubah menjadi label, dengan peluang yang mendekati 1 adalah label "Retail".
+```{r}
+wholesale.test$log.Label <- factor(ifelse(wholesale.test$log.Risk > 0.5, "Retail","Horeca"))
+
+wholesale.test[1:10, c("log.Label", "Channel")]
+```
+
+Variabel `log.Label` adalah hasil prediksi dan variabel `Channel` adalah targetnya. 
+
+# K-Nearest Neighbors (KNN)
+
+Algoritma selanjutnya yang digunakan adalah `K-Nearest Neighbors`.
+
+## Split data
+
+Digunakan data yang sebelumnya telah dipisahkan menjadi data train dan test, kemudian data perlu dipisahkan antara variabel prediktor dan targetnya.
+```{r}
+wholesale_train_x <- wholesale.train[,-1]
+
+wholesale_test_x <- wholesale.test[,-c(1,8,9)]
+
+wholesale_train_y <- wholesale.train[,1]
+
+wholesale_test_y <- wholesale.test[,1]
+```
+
+## Scaling
+
+Variabel prediktor dilakukan transformasi menggunakan z-score standarization.
+```{r}
+wholesale_train_xs <- scale(x = wholesale_train_x)
+wholesale_test_xs <- scale(x = wholesale_test_x, 
+                           center = attr(wholesale_train_xs, "scaled:center"), 
+                           scale = attr(wholesale_train_xs, "scaled:scale"))
+```
+
+## Klasifikasi
+
+Sebelum ke klasifikasi, tentukan k yang optimal terlebih dahulu, dengan cara mencari akar dari banyak baris pada data train
+```{r}
+round(sqrt(nrow(wholesale_train_xs)))
+```
+
+K yang dipilih adalah 19, selain karena hasil dari perhitungan k optimal, juga memenuhi syarat k harus ganjil, sebab banyak kategori variabel target adalah genap (2).
+
+```{r}
+library(class)
+
+knn.Label <- knn(train = wholesale_train_xs, 
+                 test = wholesale_test_xs,
+                 cl = wholesale_train_y,
+                 k = 19)
+
+head(knn.Label)
+```
+
+# Evaluasi model
+
+## Regresi Logistik
+
+Lakukan evaluasi pada model `Regresi Logistik`
+```{r}
+library(caret)
+cm_log <- confusionMatrix(data = wholesale.test$log.Label, 
+                          reference = wholesale.test$Channel)
+cm_log
+```
+
+- Re-call/Sensitivity = dari semua data aktual yang positif, seberapa mampu proporsi model menebak dengan benar kelas positif.
+- Specificity = dari semua data aktual yang negatif, seberapa mampu proporsi model menebak dengan benar kelas negatif.
+- Accuracy = seberapa mampu model menebak dengan benar variabel target Y.
+- Precision = dari semua hasil prediksi yang positif, seberapa mampu model menebak dengan benar kelas positif.
+
+```{r}
+eval_logit <- tibble(Accuracy = cm_log$overall[1],
+                     Recall = cm_log$byClass[1],
+                     Specificity = cm_log$byClass[2],
+                     Precision = cm_log$byClass[3])
+eval_logit
+```
+
+Dari hasil di atas, dapat kita ambil informasi bahwa kemampuan model dalam menebak target Y (Horeca dan Retail) sebesar 84.09%. Sedangkan dari keluruhan data aktual klien Horeca, model mampu menebak dengan benar sebesar 94.74%. Dari keseluruhan data aktual klien Retail, model mampu menebak dengan benar sebesar 64.52%. Dari keseluruhan hasil prediksi yang mampu ditebak oleh model, model mampu menebak benar segmen klien Horeca sebesar 83.08%.
+
+### Tuning cutoff
+
+Dilakukan tuning cutoff untuk mengetahui threshold maksimum dari apa yang akan kita teliti.
+```{r}
+performa <- function(cutoff, prob, ref, postarget, negtarget) 
+{
+  predict <- factor(ifelse(prob >= cutoff, postarget, negtarget))
+  conf <- confusionMatrix(predict , ref, positive = postarget)
+  acc <- conf$overall[1]
+  rec <- conf$byClass[1]
+  prec <- conf$byClass[3]
+  spec <- conf$byClass[2]
+  mat <- t(as.matrix(c(rec , acc , prec, spec))) 
+  colnames(mat) <- c("recall", "accuracy", "precicion", "specificity")
+  return(mat)
+}
+
+co <- seq(0.01,0.80,length=100)
+result <- matrix(0,100,4)
+
+for(i in 1:100){
+  result[i,] = performa(cutoff = co[i], 
+                     prob = wholesale.test$log.Risk, 
+                     ref = wholesale.test$Channel, 
+                     postarget = "Horeca", 
+                     negtarget = "Retail")
+}
+
+tibble("Recall" = result[,1],
+           "Accuracy" = result[,2],
+           "Precision" = result[,3],
+           "Specificity" = result[,4],
+                   "Cutoff" = co) %>% 
+  gather(key = "performa", value = "value", 1:4) %>% 
+  ggplot(aes(x = Cutoff, y = value, col = performa)) +
+  geom_line(lwd = 1.5) +
+  scale_color_manual(values = c("darkred","darkgreen","orange", "blue")) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.1)) +
+  labs(title = "Tradeoff model perfomance") +
+  theme_light() +
+  theme(legend.position = "top",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank())
+```
+
+Berdasarkan grafik Tradeoff model performance diatas, dapat diketahui bahwa dengan cutoff/threshold 0.5 kita memperoleh nilai specificity, accuracy dan precision yang cukup tinggi, namun nilai recall agak rendah. Semua kelas di variabel target dianggap penting, maka metrik yang akan digunakan adalah accuracy, sehingga cutoff/threshold yang dipakai tetap 0.5.
+
+## KNN
+
+Lakukan evaluasi pada model `K-Nearest Neighbors`
+```{r}
+cm_knn <- confusionMatrix(data = knn.Label, 
+                          reference = wholesale_test_y)
+cm_knn
+```
+
+```{r}
+eval_knn <- tibble(Accuracy = cm_knn$overall[1],
+                     Recall = cm_knn$byClass[1],
+                     Specificity = cm_knn$byClass[2],
+                     Precision = cm_knn$byClass[3])
+eval_knn
+```
+
+Dari hasil di atas, dapat kita ambil informasi bahwa kemampuan model dalam menebak target Y (Horeca dan Retail) sebesar 86.36%. Sedangkan dari keluruhan data aktual klien Horeca, model mampu menebak dengan benar sebesar 94.74%. Dari keseluruhan data aktual klien Retail, model mampu menebak dengan benar sebesar 70.97%. Dari keseluruhan hasil prediksi yang mampu ditebak oleh model, model mampu menebak benar segmen klien Horeca sebesar 85.71%.
+
+# Simpulan
+
+Dilihat dari kedua metode yaitu Regresi Logistik dan K-NN, kinerja model dalam memprediksi benar dari data aktual segmentasi klien sudah baik, dibuktikan dengan nilai `Accuracy` yang lebih dari 80% untuk kedua metode. Karena semua kelas dianggap penting, maka metrik yang digunakan untuk perbandingan kinerja model adalah `Accuracy`. Model dengan metode K-NN lebih baik dalam klasifikasi ini karena memiliki nilai `Accuracy` = 86.36% lebih besar dari pada menggunakan metode regresi logistik yang memiliki nilai `Accuracy` = 84.09%.
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
