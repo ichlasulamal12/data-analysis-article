@@ -1,0 +1,288 @@
+---
+title: "Prediction on Crime Rate using Linear Regression"
+author: "Ichlasul Amal"
+date: "January 12, 2021"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: 
+        collapsed: false
+    number_sections: true
+    theme: united
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 9999)
+#`r format(Sys.time(), '%d %B, %Y')`
+```
+
+# Objektif
+Pada artikel ini, dilakukan penerapan algoritma Regresi Linear untuk memprediksi tingkat kejahatan (`crime_rate`). Dataset yang digunakan berasal dari setiap negara bagian di Amerika Serikat dan diambil pada tahun 1960. Regresi Linear dapat digunakan untuk memprediksi tingkat kejahatan dan mengetahui variabel apa saja yang signifikan berpengaruh terhadap tingkat kejahatan.
+
+# Persiapan Data dan Exploratory Data Analysis
+
+Melakukan read dataset yang akan digunakan dalam analisis
+```{r}
+crime <- read.csv("data_input/crime.csv")
+head(crime)
+```
+
+Setelah dilakukan read data, nama kolom masih sulit untuk dimengerti karena berupa singkatan, sehingga diubah menjadi seperti di bawah ini
+```{r}
+names(crime) <- c("X" ,"percent_m", "is_south", "mean_education", "police_exp60", "police_exp59", "labour_participation", "m_per1000f", "state_pop", "nonwhites_per1000", "unemploy_m24", "unemploy_m39", "gdp", "inequality", "prob_prison", "time_prison", "crime_rate")
+crime
+```
+
+Dataset ini berasal dari tiap negara bagian di Amerika Serikat, diambil pada tahun 1960. Penjelasan dari tiap kolom pada dataset sebagai berikut:
+
+- `persen_m`: persentase laki-laki berusia 14-24
+- `is_south`: apakah berada di negara bagian Selatan. 1 untuk Ya, 0 untuk Tidak.
+- `mean_education`: rata-rata tahun sekolah
+- `police_exp60`: pengeluaran polisi tahun 1960
+- `police_exp59`: pengeluaran polisi tahun 1959
+- `labour_participation`: tingkat partisipasi angkatan kerja
+- `m_per1000f`: jumlah pria per 1000 wanita
+- `state_pop`: populasi negara bagian
+- `nonwhites_per1000`: jumlah penduduk non-kulit putih per 1000 orang
+- `unemploy_m24`: tingkat pengangguran pria perkotaan berusia 14-24 tahun
+- `unemploy_m39`: tingkat pengangguran laki-laki perkotaan berusia 35-39 tahun
+- `gdp`: produk domestik bruto per kapita
+- `inequality`: ketimpangan pendapatan
+- `prob_prison`: kemungkinan hukuman penjara
+- `time_prison`: waktu rata-rata hukuman di penjara
+- `crime_rate`: tingkat kejahatan dalam kategori yang tidak ditentukan
+
+Dilakukan pengecekan pada struktur data
+```{r}
+library(dplyr)
+glimpse(crime)
+```
+
+Tipe kolom `is_south` adalah integer sehingga belum tepat, karena seharusnya bertipe factor, kemudian dilakukan pengubahan menjadi bertipe factor. Selain itu, kolom `X` akan dihapus, karena kolom tersebut berisi nomor dari tiap baris, sehingga tidak dibutuhkan dalam analisis.
+
+```{r}
+crime <- crime %>% 
+  select(-X) %>% 
+  mutate(is_south = as.factor(is_south))
+crime
+```
+
+Dilakukan cek apakah terdapat missing value pada dataset
+```{r}
+colSums(is.na(crime))
+```
+
+Selanjutnya dicek bagaimana korelasi antar variabel
+```{r}
+library(GGally)
+ggcorr(crime,label=T, layout.exp=2, hjust= 1)
+```
+
+Pada grafik korelasi di atas, korelasi antara variabel `crime_rate` dan variabel prediktor bervariasi, ada yang berkorelasi positif dan berkorelasi negatif. Variabel `police_exp59` dan `police_exp60` memiliki korelasi **kuat** terhadap `crime_rate`. Variabel `gdp` berkorelasi **sedang** terhadap `crime_rate`. Variabel `nonwhites_per1000`, `time_prison`, `unemploy_m24`, dan `percent_m` berkorelasi **sangat rendah** terhadap `crime_rate`, dan variabel prediktor sisanya berkorelasi **rendah** terhadap `crime_rate`.
+
+Langkah selanjutnya adalah cek distribusi pada variabel yang bertipe numerik
+```{r}
+library(tidyr)
+ggplot(gather(crime %>% select_if(is.numeric)), aes(value)) + 
+    geom_histogram(bins = 10) + 
+    facet_wrap(~key, scales = 'free_x')
+```
+
+# Pembuatan Model
+
+Sebelum dilakukan pemodelan, terlebih dahulu dilakukan split pada data menjadi data train dan data test. Proporsi untuk data train dan data test adalah 70:30.
+```{r}
+set.seed(123)
+samplesize <- round(0.7 * nrow(crime), 0)
+index <- sample(seq_len(nrow(crime)), size = samplesize)
+
+data_train <- crime[index, ]
+data_test <- crime[-index, ]
+```
+
+Sebagai model baseline, akan digunakan semua variabel prediktor untuk pembuatan model
+```{r}
+model_all <- lm(formula = crime_rate ~ ., data = data_train)
+summary(model_all)
+```
+Dari summary model, dapat dinyatakan bahwa:
+
+- pada taraf signifikansi 0.05, variabel `percent_m`, `mean_education`, `labour_participation`, `m_per1000f` dan `unemploy_m24` berpengaruh signifikan terhadap `crime_rate`
+- pada uji kecocokan model, didapatkan p-value kurang dari 0.05 sehingga model dinyatakan cocok dalam menyatakan hubungan variabel-variabel prediktor terhadap variabel target yaitu `crime_rate`
+- model yang dibuat menggambarkan 77.66% informasi dari `crime_rate`, sedangkan sisanya yaitu 22.34% dipengaruhi variabel lain diluar model
+
+## Model Tuning
+
+Model yang dibuat masih terdapat beberapa variabel yang tidak berpengaruh signifikan terhadap variabel target. Dilakukan `stepwise regression` untuk memilih variabel terbaik.
+
+```{r}
+model_none <- lm(crime_rate ~ 1, data = data_train)
+```
+
+### Metode Backward
+```{r}
+model_backward <- step(object = model_all, direction = "backward")
+```
+
+```{r}
+summary(model_backward)
+```
+
+Hasil summary dari model backward, variabel `nonwhites_per1000` tidak berpengaruh signifikan terhadap `crime_rate` karena p-value yang cukup besar pada uji t yaitu 0.083817 dan lebih besar alpha = 0.05. Sehingga variabel `nonwhites_per1000` akan coba dihapus dari pembuatan model.
+
+```{r}
+model_backward_sig <- lm(formula = crime_rate ~ percent_m + mean_education + 
+                           police_exp60 + labour_participation + m_per1000f + unemploy_m24 + 
+                           unemploy_m39 + inequality + time_prison, data = data_train)
+summary(model_backward_sig)
+```
+
+### Metode Forward
+```{r}
+model_forward <- step(object = model_none, direction = "forward", 
+                      scope = list(lower=model_none, upper=model_all))
+```
+
+```{r}
+summary(model_forward)
+```
+
+Hasil summary dari model forward, variabel `inequality` tidak berpengaruh signifikan terhadap `crime_rate` karena p-value yang cukup besar pada uji t yaitu 0.13293 dan lebih besar alpha = 0.05. Sehingga variabel `inequality` akan coba dihapus dari pembuatan model.
+
+```{r}
+model_forward_sig <- lm(formula = crime_rate ~ police_exp60 + percent_m + m_per1000f + 
+                          is_south + mean_education + time_prison, data = data_train)
+summary(model_forward_sig)
+```
+
+### Metode Both
+
+```{r}
+model_both1 <- step(object = model_all, direction = "both",
+                    scope = list(lower=model_none, upper=model_all))
+```
+
+```{r}
+model_both2 <- step(object = model_none, direction = "both",
+                    scope = list(lower=model_none, upper=model_all))
+```
+
+### Goodness of Fit
+```{r}
+summary(model_all)$adj.r.squared
+summary(model_backward)$adj.r.squared
+summary(model_backward_sig)$adj.r.squared
+summary(model_forward)$adj.r.squared
+summary(model_forward_sig)$adj.r.squared
+summary(model_both1)$adj.r.squared
+summary(model_both2)$adj.r.squared
+```
+
+Menggunakan `step wise regression`, didapatkan nilai adjusted r-squared yang lebih tinggi. Model backward dan both1 memiliki adjusted r-squared paling tinggi sebesar 80.82%, diikuti model backward_sig dan model_all.
+
+## Model Evaluation 
+```{r}
+library(performance)
+compare_performance(model_all, model_backward, model_backward_sig, model_forward,
+                    model_forward_sig, model_both1, model_both2)
+```
+
+### Evaluasi pada Data Test
+```{r}
+library(MLmetrics)
+all_pred <- predict(model_all,data_test)
+backward_pred <- predict(model_backward,data_test)
+backward_sig_pred <- predict(model_backward_sig,data_test)
+forward_pred <- predict(model_forward,data_test)
+forward_sig_pred <- predict(model_forward_sig,data_test)
+both_pred1 <- predict(model_both1,data_test)
+both_pred2 <- predict(model_both2,data_test)
+
+data.frame(RMSE = c(RMSE(all_pred,data_test$crime_rate),
+                    RMSE(backward_pred,data_test$crime_rate),
+                    RMSE(backward_sig_pred,data_test$crime_rate),
+                    RMSE(forward_pred,data_test$crime_rate),
+                    RMSE(forward_sig_pred,data_test$crime_rate),
+                    RMSE(both_pred1,data_test$crime_rate),
+                    RMSE(both_pred2,data_test$crime_rate)),
+           model = c("All","Backward","Backward_sig","Forward","Forward_sig","Both 1","Both 2"))
+```
+
+Pada evaluasi menggunakan data test, didapatkan RMSE terkecil pada model Forward dan Both 2, diikuti model Backward_sig dan Backward. Nilai RMSE terbesar terdapat pada Model All.
+
+# Uji Asumsi
+Model yang dipilih adalah model Backward_sig, karena memiliki nilai adjusted r-square yang cukup tinggi dan nilai RMSE yang cukup rendah.
+
+## Normalitas
+
+Shapiro-Wilk hypothesis:
+
+- H0: error/residual berdistribusi normal
+- H1: error/residual tidak berdistribusi normal
+
+```{r}
+shapiro.test(model_backward_sig$residuals)
+```
+
+Dari hasil uji Shapiro-Wilk, didapatkan p-value = 0.5771 lebih besar dari alpha = 0.05, maka H0 gagal ditolak, sehingga disimpulkan residual berdistribusi normal.
+
+## Homoskedastisitas
+```{r}
+resact <- data.frame(residual = model_backward_sig$residuals, 
+                     fitted = model_backward_sig$fitted.values)
+
+resact %>% ggplot(aes(fitted, residual)) + geom_point() + geom_hline(aes(yintercept = 0)) + 
+    theme(panel.grid = element_blank(), panel.background = element_blank())
+```
+
+Melalui uji visual, diketahui nilai residual menyebar acak dan tidak ada pola tertentu, sehingga residual disimpulkan memenuhi asumsi homoskedastisitas.
+
+Secara formal, untuk mendeteksi gejala heteroskedastisitas, dapat digunakan uji Breusch-Pagan.
+
+Breusch-Pagan hypothesis :
+
+- H0: Homoscedasticity
+- H1: Heteroscedasticity
+
+```{r}
+library(lmtest)
+bptest(model_backward_sig)
+```
+
+Didapatkan p-value = 0.2381 lebih besar dari alpha = 0.05, maka H0 gagal ditolak, sehingga disimpulkan residual bersifat homoskedastisitas.
+
+## Non Autokorelasi
+```{r}
+library(car)
+set.seed(1)
+durbinWatsonTest(model_backward_sig)
+```
+
+Melalui uji Durbin-Watson, diperoleh p-value = 0.622 lebih besar dari alpha = 0.05, maka gagal menolak H0, sehingga disimpulkan residual dalam model regresi tidak berkorelasi otomatis.
+
+## Non Multikolinearitas
+```{r}
+vif(model_backward_sig)
+```
+
+Dari nilai VIF variabel prediktor di atas, semuanya bernilai kurang dari 10, sehingga disimpulkan tidak terdapat multikolinearitas.
+
+# Simpulan
+
+Variabel yang digunakan pada model akhir untuk mendeskripsikan variansi `crime_rate` adalah `percent_m`, `mean_education`, `police_exp60`, `labour_participation`, `m_per1000f`, `unemploy_m24`, `unemploy_m39`, `inequality`, dan `time_prison`. Model ini telah memenuhi uji asumsi klasik. Model akhir dapat ditulis dalam persamaan regresi sebagai berikut:
+
+$$ crime\_rate = -9471.069 + 11.252 * percent\_m + 22.617 * mean\_education + 9.667 * police\_exp60 \\- 3.034 * labour\_participation + 6.405 * m\_per1000f - 11.069 * unemploy\_m24 \\+ 17.352 * unemploy\_m39 + 5.650 * inequality + 14.612 * time\_prison $$
+Model akhir memiliki adjusted r-square sebesar 78.92%, artinya variabel prediktor menggambarkan variansi variabel target (`crime_rate`) sebesar 78.92%, sisanya 21.08% dijelaskan oleh variabel lain diluar model. Nilai RMSE yang dihasilkan pada data train sebesar 162.04 dan pada data test sebesar 316.3251. 
+
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
